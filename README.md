@@ -270,7 +270,7 @@ CONFIG = {
 ## Citation
 
 ```bibtex
-@article{https://zenodo.org/records/19821414,
+@article{https://zenodo.org/records/19822719,
   title={Rules Are All You Need: Learning Interpretable Neural Programs 
          from Few Examples via Primitive Composition and 
          Cyclic Self-Improvement},
