@@ -1,37 +1,100 @@
 # Neural Program Reasoner (NPR)
 
-**Learning Interpretable Rule Programs from Few Examples via Neural Primitive Composition and Cyclic Self-Improvement**
+### *Rules Are All You Need*
+
+**Learning Interpretable Neural Programs from Few Examples via Primitive Composition and Cyclic Self-Improvement**
+
+*Alessandro Schino — April 2026*
 
 ---
 
-## Overview
+## What is this?
 
-The Neural Program Reasoner (NPR) is a novel architecture that bridges neural network flexibility and symbolic reasoning interpretability. Given a small set of input-output examples demonstrating a linguistic relationship, NPR:
+NPR is an architecture that **discovers interpretable programs** from a few examples. Instead of encoding rules implicitly in billions of parameters like a Transformer, NPR builds explicit programs from composable neural primitives that you can **read**, **modify**, and **reuse**.
 
-1. **Perceives** the input through a frozen pre-trained language model (GPT-2)
-2. **Synthesizes** an explicit program composed of learnable neural primitives
-3. **Executes** the program on new inputs to produce predictions
-4. **Memorizes** discovered programs for efficient reuse
-5. **Self-improves** by compressing frequent primitive sequences into new higher-level operations
-
-Unlike standard Transformer models that encode knowledge implicitly in billions of parameters, NPR discovers interpretable rule programs that can be **read**, **modified**, **transferred**, and **composed**.
+```
+Input: 5 examples of a relationship (e.g., "hot→cold", "big→small", ...)
+  ↓
+NPR discovers: IDENTITY → MORPH  (a 2-step program)
+  ↓
+Applies to new input: "loud" → "quiet" ✓
+```
 
 ## Key Results
 
-| Metric | Cycle 1 (6 primitives) | Cycle 2 (8 primitives) | Cycle 3 (10 primitives) |
-|--------|----------------------|----------------------|------------------------|
-| Overall Accuracy | 16.7% | 46.7% | **69.3%** |
-| Top-3 Accuracy | 38.0% | 62.7% | **87.3%** |
-
-The model discovers **distinct, consistent programs** for each relation type:
+### NPR vs GPT-2 Few-Shot on Google Analogy Benchmark
 
 ```
-opposite:    LOOKUP -> MORPH -> NEGATE
-capital:     IDENTITY -> ASSOCIATE -> LOOKUP
-plural:      MORPH -> ASSOCIATE -> NEGATE
-past_tense:  NEGATE -> IDENTITY -> ASSOCIATE
-comparative: LOOKUP -> BLEND -> IDENTITY
+    Relation               |   NPR    t3 |  GPT2    t3
+    -----------------------+-------------+------------
+    capital-world          |    2%   10% |    0%    4%  [NPR]
+    city-in-state          |   34%   56% |    0%   12%  [NPR]
+    currency               |   54%   64% |    8%    8%  [NPR]
+    gram1-adjective-to-adv |   46%   68% |    8%   46%  [NPR]
+    gram2-opposite         |   58%   96% |    0%   28%  [NPR]
+    gram3-comparative      |   50%   68% |   68%   98%  [GPT2]
+    gram4-superlative      |   64%   84% |   38%   66%  [NPR]
+    gram5-present-particip |   78%  100% |   72%   90%  [NPR]
+    gram6-nationality-adje |   60%   80% |    6%   38%  [NPR]
+    gram7-past-tense       |   54%   74% |   32%   82%  [NPR]
+    gram8-plural           |   58%   82% |   16%   72%  [NPR]
+    gram9-plural-verbs     |   70%   88% |   68%   90%  [NPR]
+
+    NPR  OVERALL: 52.3% (top3: 72.5%)
+    GPT2 OVERALL: 26.3% (top3: 52.8%)
 ```
+
+**NPR wins on 10/12 relations**, nearly doubling GPT-2 overall accuracy.
+
+### Cyclic Self-Improvement
+
+| Stage | Primitives | Overall | Top-3 |
+|-------|-----------|---------|-------|
+| Cycle 1 (base) | 6 | 16.0% | 28.3% |
+| Cycle 2 (+2 invented) | 8 | 40.5% | 62.5% |
+| Cycle 3 (+2 invented) | 10 | 54.3% | 70.5% |
+| Final test | 10 | 52.3% | 72.5% |
+
+### Discovered Programs
+
+```
+    capital-world         : ASSOCIATE -> NEGATE              (K=2)
+    city-in-state         : MORPH -> BLEND                   (K=2)
+    currency              : ASSOCIATE -> NEGATE              (K=2)
+    gram1-adjective-to-adv: ASSOCIATE -> NEGATE              (K=2)
+    gram2-opposite        : IDENTITY -> MORPH                (K=2)
+    gram3-comparative     : LOOKUP -> BLEND                  (K=2)
+    gram4-superlative     : NEGATE -> BLEND                  (K=2)
+    gram5-present-particip: ASSOCIATE -> LOOKUP_NEGATE       (K=2)  ← invented primitive!
+    gram6-nationality-adje: LOOKUP -> BLEND                  (K=2)
+    gram7-past-tense      : ASSOCIATE -> NEGATE              (K=2)
+    gram8-plural          : BLEND -> MORPH                   (K=2)
+    gram9-plural-verbs    : ASSOCIATE -> NEGATE              (K=2)
+```
+
+### Primitive Usage
+
+```
+    BLEND               :  23.7%
+    NEGATE              :  22.5%
+    ASSOCIATE           :  22.2%
+    MORPH               :  14.5%
+    LOOKUP              :  11.3%
+    IDENTITY            :   4.2%
+    NEGATE_MORPH        :   1.2%   ← invented
+    LOOKUP_NEGATE       :   0.5%   ← invented
+```
+
+### Invented Primitives
+
+```
+    Cycle 1: MORPH_IDENTITY   (= MORPH → IDENTITY, seen 97x)
+             LOOKUP_NEGATE    (= LOOKUP → NEGATE, seen 83x)
+    Cycle 2: ASSOCIATE_NEGATE (= ASSOCIATE → NEGATE, seen 208x)
+             NEGATE_MORPH     (= NEGATE → MORPH, seen 126x)
+```
+
+---
 
 ## Architecture
 
@@ -39,61 +102,60 @@ comparative: LOOKUP -> BLEND -> IDENTITY
 Input Text
     │
     ▼
-┌──────────────────┐
-│   PERCEIVER      │  GPT-2 Small (frozen, layer 8)
-│   Text → R^768   │  Transforms text into semantic vectors
-└────────┬─────────┘
+┌───────────────────┐
+│  PERCEIVER        │  GPT-2 Small frozen (layer 8)
+│  + EmbeddingCache │  Pre-computed representations (~10s startup)
+└────────┬──────────┘
          │
          ▼
-┌──────────────────────────────────────────────┐
-│   PROGRAM SYNTHESIZER                         │
-│                                               │
-│   Examples → Self-Attention → Signature       │
-│   Signature → Per-step MLP → Gumbel-Softmax  │
-│   Output: sequence of primitive selections    │
-└────────┬─────────────────────────────────────┘
+┌────────────────────────────────────────────────┐
+│  PROGRAM SYNTHESIZER                            │
+│  Examples → 2x Self-Attention → Signature       │
+│  Signature → Per-step MLP → Gumbel-Softmax     │
+│  + Stop Predictor (variable K=2..6)             │
+└────────┬───────────────────────────────────────┘
          │
          ▼
-┌──────────────────────────────────────────────┐
-│   PRIMITIVE LIBRARY                           │
-│                                               │
-│   IDENTITY  │ NEGATE  │ MORPH                 │
-│   ASSOCIATE │ LOOKUP  │ BLEND                 │
-│   + dynamically invented compressed primitives│
-└────────┬─────────────────────────────────────┘
+┌────────────────────────────────────────────────┐
+│  PRIMITIVE LIBRARY                              │
+│  IDENTITY │ NEGATE │ MORPH │ ASSOCIATE          │
+│  LOOKUP   │ BLEND  │ + invented primitives      │
+└────────┬───────────────────────────────────────┘
          │
          ▼
-┌──────────────────┐
-│   EXECUTOR       │  Applies selected primitives sequentially
-│   + step embed   │  with learnable step embeddings
-└────────┬─────────┘
+┌───────────────────┐
+│  EXECUTOR         │  Sequential primitive application
+│  + step embeddings│  with learnable positional encoding
+└────────┬──────────┘
          │
          ▼
-┌──────────────────┐
-│   GENERATOR      │  Maps (transformed + original + signature)
-│   → vocabulary   │  to prediction over restricted vocabulary
-└──────────────────┘
+┌───────────────────┐
+│  GENERATOR        │  (transformed + original + signature) → vocab
+└───────────────────┘
 ```
 
 ## Three Key Mechanisms
 
-### 1. Differentiable Program Synthesis (Gumbel-Softmax)
-
-The Program Synthesizer selects primitives using Gumbel-Softmax, which produces near-discrete selections during training while remaining differentiable for gradient-based optimization. At inference time, hard argmax produces fully discrete, interpretable programs.
+### 1. Gumbel-Softmax Program Synthesis
+Near-discrete but differentiable primitive selection. Temperature τ=0.8 (fixed). Hard argmax at inference.
 
 ### 2. Program Memory
-
-Discovered programs are cached in a non-parametric memory indexed by learned signature vectors. When new examples arrive, the system searches for similar signatures (cosine similarity > 0.85) and reuses cached programs, improving both speed and consistency.
+Non-parametric cache indexed by signature vectors (cosine similarity > 0.85). Capacity: 500 entries with LRU eviction.
 
 ### 3. Cyclic Self-Improvement
+```
+Cycle 1: Train with 6 base primitives → Memorize programs
+         → Find frequent pairs (MORPH→IDENTITY: 97x)
+         → Create MORPH_IDENTITY primitive → Library grows to 8
 
-After each training cycle:
-- **Analyze**: scan memorized programs for frequently co-occurring primitive pairs
-- **Compress**: create new primitives that approximate the sequential application of frequent pairs
-- **Expand**: add new primitives to the library and rebuild the Synthesizer's selection heads
-- **Retrain**: train again with the expanded primitive set
+Cycle 2: Retrain with 8 primitives → Memorize
+         → Find frequent pairs (ASSOCIATE→NEGATE: 208x)  
+         → Create ASSOCIATE_NEGATE primitive → Library grows to 10
 
-This cycle enables automatic abstraction formation — the model builds increasingly powerful operations from simpler building blocks.
+Cycle 3: Final training with 10 primitives
+```
+
+---
 
 ## Requirements
 
@@ -101,136 +163,97 @@ This cycle enables automatic abstraction formation — the model builds increasi
 Python >= 3.8
 PyTorch >= 2.0
 transformers >= 4.30
+requests
 ```
 
-## Installation
+## Quick Start
 
 ```bash
-pip install torch transformers
+pip install torch transformers requests
+python npr_scaled_fast.py
 ```
 
-## Usage
-
-### Quick Start
-
-```bash
-python neural_program_reasoner.py
-```
-
-This runs the full training pipeline: 3 self-improvement cycles with evaluation after each cycle, followed by a final test. GPT-2 Small is downloaded automatically on first run (~500MB).
-
-### Configuration
-
-All hyperparameters are in the `CONFIG` dictionary at the top of the file:
-
-```python
-CONFIG = {
-    "proj_dim": 256,            # Internal projection dimension
-    "num_program_steps": 3,     # Steps per program
-    "temperature": 0.8,         # Gumbel-Softmax temperature
-    "grad_accumulation": 16,    # Simulated batch size
-    "num_examples": 5,          # Examples per task
-    "memory_capacity": 200,     # Max programs in memory
-    "compression_threshold": 5, # Min frequency to compress
-    "max_new_primitives": 2,    # Max new primitives per cycle
-    "num_cycles": 3,            # Self-improvement cycles
-    "iters_per_cycle": [2000, 1500, 1000],
-    "lr_per_cycle": [5e-4, 3e-4, 1e-4],
-    "perceiver_layer": 8,       # GPT-2 layer for representations
-}
-```
-
-### Expected Output
-
-The training produces output like:
-
-```
-CYCLE 1/3 | Primitives: 6 | Params: 18,746,056
-  [C1] It    0 | L:5.4195 | Acc:  0.0% | [plural] 'tooth' -> 'spain' (want:'teeth') ✗
-  [C1] It  200 | L:4.6452 | Acc:  3.0% | [opposite] 'loud' -> 'quiet' (want:'quiet') ✓
-  ...
-
---- Compression ---
-  [COMPRESS] Frequent: MORPH -> IDENTITY (17x)
-  [COMPRESS] Created: MORPH_IDENTITY (= MORPH -> IDENTITY)
-  [COMPRESS] Library: 8 primitives
-```
+GPT-2 Small and the Google Analogy dataset are downloaded automatically on first run.
 
 ### Expected Runtime
 
-| Platform | Time per cycle | Total (3 cycles) |
-|----------|---------------|-------------------|
-| NVIDIA T4 (Colab/Kaggle) | ~10 min | ~30 min |
-| CPU (modern laptop) | ~60 min | ~3 hours |
+| Platform | Cache | Training (3 cycles) | Total |
+|----------|-------|-------------------|-------|
+| NVIDIA T4 (Kaggle/Colab) | ~10s | ~30 min | ~30 min |
+| CPU | ~10s | ~4 hours | ~4 hours |
 
-## Dataset
+## Files
 
-The benchmark consists of five linguistic relation types:
+| File | Description |
+|------|-------------|
+| `npr_scaled_fast.py` | **Main code** — Google Analogy, EmbeddingCache, GPT-2 baseline |
+| `neural_program_reasoner.py` | Prototype — controlled 5-relation benchmark |
+| `NPR_Paper.pdf` | Academic paper |
+| `README.md` | This file |
 
-| Relation | Pairs | Example | Type |
-|----------|-------|---------|------|
-| opposite | 20 | hot → cold | Semantic transformation |
-| capital | 17 | France → Paris | Factual association |
-| plural | 20 | mouse → mice | Morphological (irregular) |
-| past_tense | 20 | walk → walked | Morphological (regular) |
-| comparative | 20 | big → bigger | Morphological (regular) |
+## Configuration
 
-The restricted vocabulary contains **175 unique words**. Tasks are generated procedurally with random sampling, so the model never sees the same task twice.
+All hyperparameters in the `CONFIG` dictionary:
 
-## Primitives
+```python
+CONFIG = {
+    "proj_dim": 256,            # Signature dimension
+    "max_program_steps": 6,     # Maximum steps per program
+    "min_program_steps": 2,     # Minimum before stop predictor activates
+    "temperature": 0.8,         # Gumbel-Softmax temperature
+    "grad_accumulation": 16,    # Simulated batch size
+    "num_examples": 5,          # Examples per task
+    "memory_capacity": 500,     # Max cached programs
+    "compression_threshold": 8, # Min frequency to compress a pair
+    "max_new_primitives": 2,    # Max new primitives per cycle
+    "num_cycles": 3,            # Self-improvement cycles
+    "iters_per_cycle": [4000, 3000, 2000],
+    "lr_per_cycle": [5e-4, 3e-4, 1e-4],
+    "perceiver_layer": 8,       # GPT-2 layer for extraction
+}
+```
 
-Each primitive is a small neural network with a specific architectural bias:
+## Loss Functions
 
-| Primitive | Architecture | Initial Gate | Purpose |
-|-----------|-------------|-------------|---------|
-| IDENTITY | Linear → Tanh | 0.01 | Near-passthrough |
-| NEGATE | 768→1536→1536→768, GELU | 0.50 | Deep semantic inversion |
-| MORPH | 768→768, LayerNorm, GELU | 0.30 | Morphological modification |
-| ASSOCIATE | Self-attention (Q,K,V) | 0.40 | Associative lookup |
-| LOOKUP | 768→1536→1536→768, GELU | 0.50 | Factual retrieval |
-| BLEND | Concat with context → MLP | 0.30 | Context mixing |
+Five loss terms work together:
 
-All primitives use gated residual connections: `output = state + sigmoid(gate) * delta(state)`.
+| Loss | Weight | Purpose |
+|------|--------|---------|
+| Cross-entropy | 1.0 | Primary prediction signal |
+| Diversity | 0.1 | Different primitives at different steps |
+| Usage | 0.05 | Use all available primitives |
+| Novelty | 0.1 | Use invented primitives (≥15% attention) |
+| Stop | 0.03 | Encourage earlier termination |
+| Length penalty | 0.02/step | Prefer shorter programs |
 
 ## Extending
 
-### Adding New Relations
+### Adding relations
+Add entries to `RELATIONS` dict or use a different dataset file.
 
-Add entries to the `RELATIONS` dictionary:
+### Adding base primitives
+1. Add name to `BASE_NAMES`
+2. Implement network in `PrimitiveLibrary.__init__`
+3. Add case in `_base()` method
+4. Add gate value
 
-```python
-RELATIONS["superlative"] = [
-    ("big", "biggest"), ("small", "smallest"), ("fast", "fastest"), ...
-]
-```
+### Using a larger Perceiver
+Replace GPT-2 with any HuggingFace model supporting `output_hidden_states=True`. Update `EmbeddingCache` and `CONFIG["perceiver_layer"]`.
 
-Then rebuild the vocabulary and retrain.
-
-### Adding New Base Primitives
-
-1. Add the name to `BASE_PRIMITIVE_NAMES`
-2. Implement the network in `PrimitiveLibrary.__init__`
-3. Add the case in `PrimitiveLibrary._apply_base`
-4. Add a gate value in `self.gates`
-
-### Using a Different Perceiver
-
-Replace `GPT2LMHeadModel` in `main()` with any HuggingFace model that supports `output_hidden_states=True`. Adjust `CONFIG["perceiver_layer"]` accordingly.
-
-## Paper
-
-See `NPR_Paper.pdf` for the full academic paper with detailed methodology, results, analysis, and references.
-
-## License
-
-MIT
+---
 
 ## Citation
 
 ```bibtex
-@article{npr2026,
-  title={Rules Are All You Need Learning Interpretable Neural Programs from Few Examples via Primitive Composition and Cyclic Self-Improvement},
-  author={Alessandro Schino},
+@article{schino2026rules,
+  title={Rules Are All You Need: Learning Interpretable Neural Programs 
+         from Few Examples via Primitive Composition and 
+         Cyclic Self-Improvement},
+  author={Schino, Alessandro},
   year={2026}
 }
 ```
+
+## License
+
+MIT
