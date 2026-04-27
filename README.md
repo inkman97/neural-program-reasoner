@@ -229,9 +229,7 @@ MIT
 
 ```bibtex
 @article{npr2026,
-  title={Neural Program Reasoner: Learning Interpretable Rule Programs 
-         from Few Examples via Neural Primitive Composition 
-         and Cyclic Self-Improvement},
+  title={Rules Are All You Need Learning Interpretable Neural Programs from Few Examples via Primitive Composition and Cyclic Self-Improvement},
   author={Alessandro Schino},
   year={2026}
 }
