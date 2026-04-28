@@ -48,12 +48,12 @@ CONFIG = {
     "compression_threshold": 6,
     "max_new_primitives": 2,
     "num_cycles": 3,
-    "iters_per_cycle": [8000, 5000, 3000],
+    "iters_per_cycle": [12000, 8000, 4000],
     "lr_per_cycle": [5e-4, 3e-4, 1e-4],
     "perceiver_layer": 8,
     "eval_samples": 40,
     "max_chain_length": 3,
-    "multistep_ratio": 0.2,
+    "multistep_ratio": 0.35,
     "chain_effect_ratio": 0.1,
     "goal_loss_weight": 0.2,
     "action_loss_weight": 0.2,
@@ -883,7 +883,7 @@ class CompleteWorldModel(nn.Module):
                 # Update slot selection for this specific action
                 step_sw = self.slot_selector(a_dev)
                 step_prop = (step_sw.unsqueeze(1) * slots).sum(0)
-                # Use the property from the current step's slot, but carry state forward
+                # Carry state forward directly — the PropertyUpdater handles the transform
                 p = self.prop_updater(p, a_dev, step_prog, self.lib)
             transformed = p
         else:
@@ -896,7 +896,7 @@ class CompleteWorldModel(nn.Module):
         return logits, prog, sig, from_mem, stop_probs, obj_attn, slot_attn, slot_weights, obj_vec, precond_score, pred_vec
 
     def plan(self, cache, initial_state, goal_state, max_depth=3):
-        """Plan entirely in latent space. No vocabulary lookup needed."""
+        """Plan in latent space with repeat penalty and goal-aware stopping."""
         self.eval()
         with torch.no_grad():
             sv = cache.get(f" {initial_state}")
@@ -910,13 +910,20 @@ class CompleteWorldModel(nn.Module):
             plan = []
             current_state_vec = sv
             current_tokens = tokens
+            prev_action = None
 
             for step in range(max_depth):
-                # 1. ActionScorer predicts the best action
+                # 1. ActionScorer predicts actions
                 al = self.action_scorer(current_state_vec, gv)
+
+                # Penalize repeating the same action (reduces heat,heat,heat)
+                if prev_action is not None:
+                    al[prev_action] -= 2.0
+
                 ai = al.argmax().item()
                 action_name = IDX2ACT[ai]
                 plan.append(action_name)
+                prev_action = ai
 
                 # 2. Simulate through World Model in LATENT SPACE
                 action_vec = cache.get(f" {action_name}")
@@ -950,8 +957,7 @@ class CompleteWorldModel(nn.Module):
                 # Predict next state as VECTOR (no vocab lookup)
                 pred_vec = self.latent_pred(obj_vec, transformed, action_vec, sig)
 
-                # Use predicted vector directly as next state
-                # Find closest known state for token access (needed for SlotAttention)
+                # Find closest known state for token access
                 best_sim, best_state = -1, None
                 for phrase, vec in cache.last_cache.items():
                     sim = F.cosine_similarity(pred_vec.unsqueeze(0), vec.unsqueeze(0)).item()
@@ -959,8 +965,9 @@ class CompleteWorldModel(nn.Module):
                         best_sim = sim; best_state = phrase
 
                 if best_state and best_sim > 0.7:
-                    current_state_vec = pred_vec  # use PREDICTED vector, not cached
-                    current_tokens = cache.get_tokens(best_state)  # nearest tokens for slot attn
+                    current_state_vec = pred_vec
+                    current_tokens = cache.get_tokens(best_state)
+                    # Goal check — stop if close enough
                     if self.goal_eval(current_state_vec, gv).item() > 0.85:
                         break
                 else:
@@ -1011,6 +1018,7 @@ def goal_contrastive_loss(goal_eval, result_vec, all_sv):
         neg_vec = random.choice(all_sv)
     neg = goal_eval(result_vec, neg_vec)
     return (F.binary_cross_entropy(pos,torch.ones_like(pos))+F.binary_cross_entropy(neg,torch.zeros_like(neg)))/2
+
 
 
 # =============================================================================
