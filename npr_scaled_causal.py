@@ -35,6 +35,7 @@ import time
 
 torch.manual_seed(42)
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+i2s_global = {}  # set in main()
 
 CONFIG = {
     "proj_dim": 256,
@@ -344,6 +345,20 @@ def generate_multistep_task(cache, s2i, chains, num_examples=3):
     er = [torch.cat([cache.get(f" {c['states'][0]}"),torch.stack([cache.get(f" {a}") for a in c["actions"]]).mean(0),cache.get(f" {c['states'][-1]}")]) for c in examples]
     ta = [cache.get(f" {a}") for a in test["actions"]]
     first_rule = TRANSITION_RULES[test["rules"][0]]
+
+    # Per-step rule examples: for each action in the chain, provide
+    # single-step examples of that specific rule so the Synthesizer
+    # can produce the right program for each step
+    per_step_examples = []
+    for rule_name in test["rules"]:
+        r = TRANSITION_RULES[rule_name]
+        step_triples = random.sample(r["triples"], min(3, len(r["triples"])))
+        step_ex = torch.stack([
+            torch.cat([cache.get(f" {s}"), cache.get(f" {a}"), cache.get(f" {res}")])
+            for s, a, res in step_triples
+        ])
+        per_step_examples.append(step_ex)
+
     return {
         "example_reprs":torch.stack(er), "test_state":cache.get(f" {test['states'][0]}"),
         "test_action":torch.stack(ta).mean(0), "test_actions":ta,
@@ -356,6 +371,8 @@ def generate_multistep_task(cache, s2i, chains, num_examples=3):
         "property_changed": first_rule["property_changed"],
         "precondition_holds": True,
         "property_idx": PROP2IDX[first_rule["property_changed"]],
+        "per_step_examples": per_step_examples,  # examples for each step's rule
+        "step_rules": test["rules"],
     }
 
 def generate_mixed_task(cache, s2i, chains, ne=5):
@@ -458,38 +475,85 @@ class ObjectExtractor(nn.Module):
 BASE_NAMES = ["IDENTITY","NEGATE","MORPH","ASSOCIATE","LOOKUP","BLEND"]
 
 class PrimitiveLibrary(nn.Module):
+    """Primitives with architectures that match their semantic roles.
+
+    IDENTITY: near-identity, minimal perturbation (small gate)
+    NEGATE:   Householder reflection — structurally an involution (f(f(x))=x)
+              H = I - 2*v*v^T/||v||^2, so H*H = I by construction
+    MORPH:    smooth nonlinear transform (LayerNorm + GELU)
+    ASSOCIATE: contextual binding via self-attention
+    LOOKUP:   deep nonlinear transform (wide MLP)
+    BLEND:    mix with learned context vector
+    """
     def __init__(self, sd):
         super().__init__()
         self.sd, self.names = sd, list(BASE_NAMES)
-        self.identity = nn.Sequential(nn.Linear(sd,sd),nn.Tanh())
-        self.negate = nn.Sequential(nn.Linear(sd,sd*2),nn.GELU(),nn.Linear(sd*2,sd*2),nn.GELU(),nn.Linear(sd*2,sd))
-        self.morph = nn.Sequential(nn.Linear(sd,sd),nn.LayerNorm(sd),nn.GELU(),nn.Linear(sd,sd))
-        self.aq,self.ak,self.av,self.ao = nn.Linear(sd,sd//4),nn.Linear(sd,sd//4),nn.Linear(sd,sd),nn.Linear(sd,sd)
-        self.lookup = nn.Sequential(nn.Linear(sd,sd*2),nn.GELU(),nn.Linear(sd*2,sd*2),nn.GELU(),nn.Linear(sd*2,sd))
-        self.bc = nn.Parameter(torch.randn(sd)*0.01)
-        self.bn = nn.Sequential(nn.Linear(sd*2,sd),nn.GELU(),nn.Linear(sd,sd))
-        self.gates = nn.ParameterList([nn.Parameter(torch.tensor(g)) for g in [0.01,0.5,0.3,0.4,0.5,0.3]])
+
+        # IDENTITY: tiny perturbation
+        self.identity = nn.Sequential(nn.Linear(sd, sd), nn.Tanh())
+
+        # NEGATE: Householder reflection H(x) = x - 2*(v·x)/(v·v) * v
+        # This is STRUCTURALLY an involution: H(H(x)) = x exactly
+        # The learned vector v determines the reflection hyperplane
+        self.negate_v = nn.Parameter(torch.randn(sd) * 0.1)
+        # Learned pre/post projections to make it more expressive
+        # while preserving the involution structure
+        self.negate_pre = nn.Linear(sd, sd)
+        self.negate_post = nn.Linear(sd, sd)
+
+        # MORPH: smooth nonlinear transform
+        self.morph = nn.Sequential(nn.Linear(sd, sd), nn.LayerNorm(sd), nn.GELU(), nn.Linear(sd, sd))
+
+        # ASSOCIATE: self-attention binding
+        self.aq, self.ak, self.av, self.ao = nn.Linear(sd, sd//4), nn.Linear(sd, sd//4), nn.Linear(sd, sd), nn.Linear(sd, sd)
+
+        # LOOKUP: deep transform
+        self.lookup = nn.Sequential(nn.Linear(sd, sd*2), nn.GELU(), nn.Linear(sd*2, sd*2), nn.GELU(), nn.Linear(sd*2, sd))
+
+        # BLEND: mix with context
+        self.bc = nn.Parameter(torch.randn(sd) * 0.01)
+        self.bn = nn.Sequential(nn.Linear(sd*2, sd), nn.GELU(), nn.Linear(sd, sd))
+
+        self.gates = nn.ParameterList([nn.Parameter(torch.tensor(g)) for g in [0.01, 0.5, 0.3, 0.4, 0.5, 0.3]])
         self.inv_p, self.inv_g = nn.ModuleList(), nn.ParameterList()
+
     @property
-    def n(self): return len(BASE_NAMES)+len(self.inv_p)
+    def n(self): return len(BASE_NAMES) + len(self.inv_p)
+
+    def _householder(self, x):
+        """Householder reflection: H(x) = x - 2*(v·x)/(v·v) * v
+        Structurally satisfies H(H(x)) = x."""
+        v = self.negate_v
+        # Project into reflection space
+        x_proj = self.negate_pre(x)
+        # Apply Householder reflection
+        vv = torch.dot(v, v) + 1e-8
+        coeff = 2 * torch.dot(v, x_proj) / vv
+        reflected = x_proj - coeff * v
+        # Project back
+        return self.negate_post(reflected)
+
     def _base(self, i, s):
-        if i==0: return s+torch.sigmoid(self.gates[0])*self.identity(s)
-        if i==1: return s+torch.sigmoid(self.gates[1])*self.negate(s)
-        if i==2: return s+torch.sigmoid(self.gates[2])*self.morph(s)
-        if i==3:
-            q,k,v=self.aq(s),self.ak(s),self.av(s)
-            return s+torch.sigmoid(self.gates[3])*self.ao(torch.sigmoid(torch.dot(q,k)/math.sqrt(q.shape[0]))*v)
-        if i==4: return s+torch.sigmoid(self.gates[4])*self.lookup(s)
-        if i==5: return s+torch.sigmoid(self.gates[5])*self.bn(torch.cat([s,self.bc]))
+        if i == 0: return s + torch.sigmoid(self.gates[0]) * self.identity(s)
+        if i == 1: return s + torch.sigmoid(self.gates[1]) * self._householder(s)
+        if i == 2: return s + torch.sigmoid(self.gates[2]) * self.morph(s)
+        if i == 3:
+            q, k, v = self.aq(s), self.ak(s), self.av(s)
+            return s + torch.sigmoid(self.gates[3]) * self.ao(torch.sigmoid(torch.dot(q, k) / math.sqrt(q.shape[0])) * v)
+        if i == 4: return s + torch.sigmoid(self.gates[4]) * self.lookup(s)
+        if i == 5: return s + torch.sigmoid(self.gates[5]) * self.bn(torch.cat([s, self.bc]))
+
     def apply(self, i, s):
-        if i<len(BASE_NAMES): return self._base(i,s)
-        j=i-len(BASE_NAMES); return s+torch.sigmoid(self.inv_g[j])*self.inv_p[j](s)
-    def apply_soft(self, w, s): return sum(w[i]*self.apply(i,s) for i in range(self.n))
+        if i < len(BASE_NAMES): return self._base(i, s)
+        j = i - len(BASE_NAMES); return s + torch.sigmoid(self.inv_g[j]) * self.inv_p[j](s)
+
+    def apply_soft(self, w, s): return sum(w[i] * self.apply(i, s) for i in range(self.n))
+
     def add(self, name, a, b):
-        sd,dev=self.sd,next(self.parameters()).device
-        self.inv_p.append(nn.Sequential(nn.Linear(sd,sd*2),nn.LayerNorm(sd*2),nn.GELU(),nn.Linear(sd*2,sd*2),nn.GELU(),nn.Linear(sd*2,sd)).to(dev))
-        self.inv_g.append(nn.Parameter(torch.tensor(0.4,device=dev)))
-        self.names.append(name); print(f"  [COMPRESS] Created: {name}"); return self.n-1
+        sd, dev = self.sd, next(self.parameters()).device
+        self.inv_p.append(nn.Sequential(nn.Linear(sd, sd*2), nn.LayerNorm(sd*2), nn.GELU(), nn.Linear(sd*2, sd*2), nn.GELU(), nn.Linear(sd*2, sd)).to(dev))
+        self.inv_g.append(nn.Parameter(torch.tensor(0.4, device=dev)))
+        self.names.append(name); print(f"  [COMPRESS] Created: {name}"); return self.n - 1
 
 
 class SlotSelector(nn.Module):
@@ -511,14 +575,14 @@ class PropertyUpdater(nn.Module):
     def __init__(self, sd, action_dim, max_steps):
         super().__init__()
         self.step_emb = nn.Embedding(max_steps, sd)
-        self.action_film = nn.Sequential(nn.Linear(action_dim,sd*2),nn.GELU(),nn.Linear(sd*2,sd*2))
+        self.action_film = nn.Sequential(nn.Linear(action_dim, sd*2), nn.GELU(), nn.Linear(sd*2, sd*2))
         self.sd = sd
     def forward(self, prop_vec, action, prog, lib):
         film = self.action_film(action)
         scale, shift = film[:self.sd], film[self.sd:]
         for i, sel in enumerate(prog):
-            prop_vec = prop_vec + self.step_emb(torch.tensor(i,device=prop_vec.device))
-            prop_vec = prop_vec * (1+0.1*torch.tanh(scale)) + 0.1*torch.tanh(shift)
+            prop_vec = prop_vec + self.step_emb(torch.tensor(i, device=prop_vec.device))
+            prop_vec = prop_vec * (1 + 0.1*torch.tanh(scale)) + 0.1*torch.tanh(shift)
             prop_vec = lib.apply_soft(sel, prop_vec)
         return prop_vec
 
@@ -548,7 +612,12 @@ class RuleSynthesizer(nn.Module):
         self.a2 = nn.MultiheadAttention(pd,4,batch_first=True)
         self.n3,self.n4 = nn.LayerNorm(pd),nn.LayerNorm(pd)
         self.f2 = nn.Sequential(nn.Linear(pd,pd*2),nn.GELU(),nn.Linear(pd*2,pd))
-        self.heads = nn.ModuleList([nn.Sequential(nn.Linear(pd,128),nn.GELU(),nn.Linear(128,np)) for _ in range(max_steps)])
+        # State-conditioned heads: each head sees signature + current state
+        # This is the key fix: the program depends on WHERE you are, not just WHAT rule
+        self.state_proj = nn.Linear(state_dim, pd)
+        self.heads = nn.ModuleList([
+            nn.Sequential(nn.Linear(pd*2, 128), nn.GELU(), nn.Linear(128, np))
+            for _ in range(max_steps)])
         self.stop = nn.Sequential(nn.Linear(pd+state_dim,128),nn.GELU(),nn.Linear(128,1),nn.Sigmoid())
     def signature(self, ex):
         x=self.proj(ex).unsqueeze(0)
@@ -560,9 +629,11 @@ class RuleSynthesizer(nn.Module):
         if new_n<=old: return
         nh=nn.ModuleList()
         for h in self.heads:
-            n=nn.Sequential(nn.Linear(self.pd,128),nn.GELU(),nn.Linear(128,new_n)).to(next(h.parameters()).device)
+            n=nn.Sequential(nn.Linear(self.pd*2,128),nn.GELU(),nn.Linear(128,new_n)).to(next(h.parameters()).device)
             with torch.no_grad():
-                n[0].weight.copy_(h[0].weight); n[0].bias.copy_(h[0].bias)
+                n[0].weight[:,:self.pd].copy_(h[0].weight[:,:self.pd])
+                n[0].weight[:,self.pd:].zero_()
+                n[0].bias.copy_(h[0].bias)
                 n[2].weight[:old].copy_(h[2].weight); n[2].bias[:old].copy_(h[2].bias)
                 aw=h[2].weight.mean(0,keepdim=True).expand(new_n-old,-1)
                 n[2].weight[old:].copy_(aw+torch.randn_like(aw)*0.05)
@@ -571,12 +642,15 @@ class RuleSynthesizer(nn.Module):
         self.heads=nh; self._np=new_n
     def forward(self, ex_reprs, state, temp=0.8, np_=None, min_steps=2):
         pat=self.signature(ex_reprs); np_=np_ or self._np
+        state_ctx = self.state_proj(state)  # project state into pattern space
+        # Concatenate signature + state context for primitive selection
+        head_input = torch.cat([pat, state_ctx])
         prog, stop_probs = [], []
         for i,h in enumerate(self.heads):
             if i>=min_steps:
                 sp=self.stop(torch.cat([pat,state])); stop_probs.append(sp)
                 if not self.training and sp.item()>0.6: break
-            lg=h(pat)
+            lg=h(head_input)  # now depends on state too
             if lg.shape[0]<np_: lg=torch.cat([lg,torch.zeros(np_-lg.shape[0],device=lg.device)])
             elif lg.shape[0]>np_: lg=lg[:np_]
             if self.training: prog.append(F.gumbel_softmax(lg,tau=temp,hard=False))
@@ -697,8 +771,21 @@ class CompleteWorldModel(nn.Module):
 
         # Transform property
         if task.get("task_type")=="multistep" and "test_actions" in task:
+            # Each step gets its OWN program from its own rule examples
             p = prop_vec
-            for a in task["test_actions"]: p = self.prop_updater(p, a.to(DEVICE), prog, self.lib)
+            per_step_ex = task.get("per_step_examples")
+            for step_i, a in enumerate(task["test_actions"]):
+                a_dev = a.to(DEVICE)
+                if per_step_ex and step_i < len(per_step_ex):
+                    # Synthesize program specific to this step's rule
+                    step_prog, _, _ = self.syn(per_step_ex[step_i].to(DEVICE), p, temp, np_)
+                else:
+                    step_prog = prog  # fallback
+                # Update slot selection for this specific action
+                step_sw = self.slot_selector(a_dev)
+                step_prop = (step_sw.unsqueeze(1) * slots).sum(0)
+                # Use the property from the current step's slot, but carry state forward
+                p = self.prop_updater(p, a_dev, step_prog, self.lib)
             transformed = p
         else:
             transformed = self.prop_updater(prop_vec, test_action, prog, self.lib)
@@ -707,16 +794,72 @@ class CompleteWorldModel(nn.Module):
         return logits, prog, sig, from_mem, stop_probs, obj_attn, slot_attn, slot_weights, obj_vec, precond_score
 
     def plan(self, cache, initial_state, goal_state, max_depth=3):
+        """Plan using ActionScorer + real World Model simulation."""
         self.eval()
         with torch.no_grad():
-            sv = cache.get(f" {initial_state}"); gv = cache.get(f" {goal_state}")
+            sv = cache.get(f" {initial_state}")
+            gv = cache.get(f" {goal_state}")
+            tokens = cache.get_tokens(f" {initial_state}")
+
+            # Check if already at goal
+            if self.goal_eval(sv, gv).item() > 0.9:
+                return [], self.goal_eval(sv, gv).item()
+
             plan = []
-            for _ in range(max_depth):
-                al = self.action_scorer(sv, gv)
-                ai = al.argmax().item(); plan.append(IDX2ACT[ai])
-                if self.goal_eval(sv, gv).item()>0.8: break
-                sv = sv + 0.1*(gv-sv)
-            return plan, self.goal_eval(sv, gv).item()
+            current_state_vec = sv
+            current_tokens = tokens
+
+            for step in range(max_depth):
+                # 1. ActionScorer predicts the best action
+                al = self.action_scorer(current_state_vec, gv)
+                ai = al.argmax().item()
+                action_name = IDX2ACT[ai]
+                plan.append(action_name)
+
+                # 2. Simulate through World Model
+                action_vec = cache.get(f" {action_name}")
+                obj_vec, _ = self.obj_ext(current_tokens)
+                slots, _ = self.slot_attn(current_tokens)
+                slot_weights = self.slot_selector(action_vec)
+                prop_vec = (slot_weights.unsqueeze(1) * slots).sum(0)
+
+                # Synthesize program for this action
+                rule_name = None
+                for rn, r in TRANSITION_RULES.items():
+                    if r["triples"][0][1] == action_name:
+                        rule_name = rn; break
+                if rule_name:
+                    r = TRANSITION_RULES[rule_name]
+                    step_triples = random.sample(r["triples"], min(3, len(r["triples"])))
+                    step_ex = torch.stack([
+                        torch.cat([cache.get(f" {s}"), cache.get(f" {a}"), cache.get(f" {res}")])
+                        for s, a, res in step_triples
+                    ]).to(DEVICE)
+                    np_ = self.lib.n
+                    step_prog, sig, _ = self.syn(step_ex, prop_vec, 0.1, np_)
+                else:
+                    np_ = self.lib.n
+                    step_prog = [F.one_hot(torch.tensor(3), np_).float().to(DEVICE),
+                                 F.one_hot(torch.tensor(1), np_).float().to(DEVICE)]
+                    sig = self.syn.signature(torch.zeros(1, self.sd*3, device=DEVICE))
+
+                transformed = self.prop_updater(prop_vec, action_vec, step_prog, self.lib)
+                logits = self.gen(obj_vec, transformed, action_vec, sig)
+                pred_idx = logits.argmax().item()
+
+                # Update state for next step
+                pred_state = i2s_global.get(pred_idx, None)
+                if pred_state and f" {pred_state}" in cache.last_cache:
+                    current_state_vec = cache.get(f" {pred_state}")
+                    current_tokens = cache.get_tokens(f" {pred_state}")
+                    # Check if we've reached the goal
+                    if self.goal_eval(current_state_vec, gv).item() > 0.85:
+                        break
+                else:
+                    break
+
+            final_score = self.goal_eval(current_state_vec, gv).item()
+            return plan, final_score
 
     def memorize(self, sig, prog, rel, ok):
         self.mem.store(sig,[s.argmax().item() for s in prog],rel,ok)
@@ -893,25 +1036,38 @@ def evaluate(model, cache, s2i, i2s, chains, tokenizer):
         print(f"\n  --- Depth-{depth} ---")
         ok,tested=0,0
         with torch.no_grad():
-            for _ in range(min(30,len(chains[depth]))):
+            for _ in range(min(50,len(chains[depth]))):
                 t=generate_multistep_task(cache,s2i,chains,3)
                 if t["depth"]!=depth: continue
                 lg,_,_,_,_,_,_,_,_,_=model(t,0.1,use_mem=False)
                 pred=i2s.get(lg.argmax().item(),"?"); ok+=pred==t["expected"]; tested+=1
-                if tested<=2: print(f"    '{t['state'][:20]}' +[{t['action'][:20]}] -> {'V' if pred==t['expected'] else 'X'}")
+                if tested<=3:
+                    print(f"    '{t['state'][:20]}' +[{t['action'][:20]}]")
+                    print(f"      -> '{pred[:25]}' want:'{t['expected'][:25]}' {'V' if pred==t['expected'] else 'X'}")
         if tested: print(f"    DEPTH-{depth}: {100*ok/tested:.0f}% [{tested} tested]")
 
     # Planning
     print(f"\n  --- Planning ---")
-    pl_ok,pl_t=0,0
-    for _ in range(30):
+    pl_1st,pl_full,pl_t=0,0,0
+    real_1st,real_full,real_t=0,0,0
+    for _ in range(50):
         task=generate_planning_task(cache,s2i,chains)
         if not task: continue
         plan,sc=model.plan(cache,task["initial_state"],task["goal_state"],max_depth=task["depth"])
-        fc=plan[0]==task["correct_actions"][0] if plan else False
-        pl_ok+=fc; pl_t+=1
-        if pl_t<=5: print(f"    {task['initial_state'][:22]} -> {task['goal_state'][:22]}  plan:{plan}  {'V' if fc else 'X'}")
-    if pl_t: print(f"\n    PLANNING (1st): {100*pl_ok/pl_t:.0f}% ({pl_ok}/{pl_t})")
+        is_round_trip = task["initial_state"] == task["goal_state"]
+        if plan:
+            fc=plan[0]==task["correct_actions"][0]
+            full_c=plan[:len(task["correct_actions"])]==task["correct_actions"]
+        else:
+            fc = is_round_trip; full_c = is_round_trip
+        pl_1st+=fc; pl_full+=full_c; pl_t+=1
+        if not is_round_trip: real_1st+=fc; real_full+=full_c; real_t+=1
+        if pl_t<=6:
+            rt=" [ROUND]" if is_round_trip else ""
+            print(f"    {task['initial_state'][:22]} -> {task['goal_state'][:22]}{rt}")
+            print(f"      correct:{task['correct_actions']}  plan:{plan}  1st:{'V' if fc else 'X'} full:{'V' if full_c else 'X'} score:{sc:.3f}")
+    if pl_t: print(f"\n    ALL:  1st:{100*pl_1st/pl_t:.0f}% full:{100*pl_full/pl_t:.0f}% ({pl_t} tested)")
+    if real_t: print(f"    REAL: 1st:{100*real_1st/real_t:.0f}% full:{100*real_full/real_t:.0f}% ({real_t} tested)")
     return results
 
 
@@ -927,6 +1083,8 @@ def main():
     gpt2=GPT2LMHeadModel.from_pretrained("gpt2").to(DEVICE).eval()
 
     sl,s2i,i2s=build_vocab()
+    global i2s_global
+    i2s_global = i2s
     print(f"\nRules:{len(TRANSITION_RULES)} | States:{len(sl)} | Actions:{NUM_ACTIONS} | Properties:{NUM_PROPERTIES}")
     print(f"Property types: {PROPERTY_TYPES}")
     chains=find_chains(CONFIG["max_chain_length"])
