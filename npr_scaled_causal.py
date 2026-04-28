@@ -48,155 +48,191 @@ CONFIG = {
     "compression_threshold": 6,
     "max_new_primitives": 2,
     "num_cycles": 3,
-    "iters_per_cycle": [5000, 3000, 2000],
+    "iters_per_cycle": [8000, 5000, 3000],
     "lr_per_cycle": [5e-4, 3e-4, 1e-4],
     "perceiver_layer": 8,
     "eval_samples": 40,
     "max_chain_length": 3,
     "multistep_ratio": 0.2,
+    "chain_effect_ratio": 0.1,
     "goal_loss_weight": 0.2,
     "action_loss_weight": 0.2,
     "precondition_loss_weight": 0.15,
 }
 
 # =============================================================================
-# Dataset with preconditions, chain effects, and multi-object scenes
+# World Definition: Objects, Properties, Actions
+# The model learns from OBSERVATIONS, not from explicit rules.
 # =============================================================================
 
-# Each rule now has: (state, action, result, precondition, side_effects)
-# precondition: what must be true for the action to work
-# side_effects: additional changes that happen
-
-TRANSITION_RULES = {
-    "heat": {
-        "triples": [
-            ("the water is cold","heat","the water is hot"),("the soup is cold","heat","the soup is hot"),
-            ("the coffee is cold","heat","the coffee is hot"),("the tea is cold","heat","the tea is hot"),
-            ("the milk is cold","heat","the milk is hot"),("the food is cold","heat","the food is hot"),
-            ("the oil is cold","heat","the oil is hot"),("the pan is cold","heat","the pan is hot"),
-            ("the iron is cold","heat","the iron is hot"),("the metal is cold","heat","the metal is hot"),
-        ],
-        "precondition": "cold",  # must be cold to heat
-        "property_changed": "temperature",
-    },
-    "cool": {
-        "triples": [
-            ("the water is hot","cool","the water is cold"),("the soup is hot","cool","the soup is cold"),
-            ("the coffee is hot","cool","the coffee is cold"),("the tea is hot","cool","the tea is cold"),
-            ("the milk is hot","cool","the milk is cold"),("the food is hot","cool","the food is cold"),
-            ("the oil is hot","cool","the oil is cold"),("the pan is hot","cool","the pan is cold"),
-            ("the iron is hot","cool","the iron is cold"),("the metal is hot","cool","the metal is cold"),
-        ],
-        "precondition": "hot",
-        "property_changed": "temperature",
-    },
-    "open": {
-        "triples": [
-            ("the door is closed","open","the door is open"),("the window is closed","open","the window is open"),
-            ("the box is closed","open","the box is open"),("the jar is closed","open","the jar is open"),
-            ("the gate is closed","open","the gate is open"),("the drawer is closed","open","the drawer is open"),
-            ("the lid is closed","open","the lid is open"),("the bag is closed","open","the bag is open"),
-            ("the bottle is closed","open","the bottle is open"),("the cabinet is closed","open","the cabinet is open"),
-        ],
-        "precondition": "closed",
-        "property_changed": "openness",
-    },
-    "close": {
-        "triples": [
-            ("the door is open","close","the door is closed"),("the window is open","close","the window is closed"),
-            ("the box is open","close","the box is closed"),("the jar is open","close","the jar is closed"),
-            ("the gate is open","close","the gate is closed"),("the drawer is open","close","the drawer is closed"),
-            ("the lid is open","close","the lid is closed"),("the bag is open","close","the bag is closed"),
-            ("the bottle is open","close","the bottle is closed"),("the cabinet is open","close","the cabinet is closed"),
-        ],
-        "precondition": "open",
-        "property_changed": "openness",
-    },
-    "fill": {
-        "triples": [
-            ("the glass is empty","fill","the glass is full"),("the cup is empty","fill","the cup is full"),
-            ("the bucket is empty","fill","the bucket is full"),("the pool is empty","fill","the pool is full"),
-            ("the tank is empty","fill","the tank is full"),("the bottle is empty","fill","the bottle is full"),
-            ("the bowl is empty","fill","the bowl is full"),("the tub is empty","fill","the tub is full"),
-            ("the jug is empty","fill","the jug is full"),("the pot is empty","fill","the pot is full"),
-        ],
-        "precondition": "empty",
-        "property_changed": "fullness",
-    },
-    "break": {
-        "triples": [
-            ("the glass is intact","drop","the glass is broken"),("the plate is intact","drop","the plate is broken"),
-            ("the vase is intact","drop","the vase is broken"),("the mirror is intact","drop","the mirror is broken"),
-            ("the cup is intact","drop","the cup is broken"),("the bowl is intact","drop","the bowl is broken"),
-            ("the bottle is intact","drop","the bottle is broken"),("the window is intact","drop","the window is broken"),
-            ("the jar is intact","drop","the jar is broken"),("the lamp is intact","drop","the lamp is broken"),
-        ],
-        "precondition": "intact",
-        "property_changed": "integrity",
-    },
-    "gravity": {
-        "triples": [
-            ("the ball is on the table","push","the ball is on the floor"),
-            ("the cup is on the shelf","push","the cup is on the floor"),
-            ("the book is on the desk","push","the book is on the floor"),
-            ("the phone is on the bed","push","the phone is on the floor"),
-            ("the lamp is on the table","push","the lamp is on the floor"),
-            ("the plate is on the counter","push","the plate is on the floor"),
-            ("the glass is on the table","push","the glass is on the floor"),
-            ("the toy is on the shelf","push","the toy is on the floor"),
-            ("the pen is on the desk","push","the pen is on the floor"),
-            ("the remote is on the couch","push","the remote is on the floor"),
-        ],
-        "precondition": "on the",  # must be on something
-        "property_changed": "position",
-    },
-    "switch_on": {
-        "triples": [
-            ("the lamp is off","switch on","the lamp is on"),("the light is off","switch on","the light is on"),
-            ("the screen is off","switch on","the screen is on"),("the tv is off","switch on","the tv is on"),
-            ("the radio is off","switch on","the radio is on"),("the computer is off","switch on","the computer is on"),
-            ("the fan is off","switch on","the fan is on"),("the heater is off","switch on","the heater is on"),
-            ("the oven is off","switch on","the oven is on"),("the speaker is off","switch on","the speaker is on"),
-        ],
-        "precondition": "off",
-        "property_changed": "power",
-    },
-    "switch_off": {
-        "triples": [
-            ("the lamp is on","switch off","the lamp is off"),("the light is on","switch off","the light is off"),
-            ("the screen is on","switch off","the screen is off"),("the tv is on","switch off","the tv is off"),
-            ("the radio is on","switch off","the radio is off"),("the computer is on","switch off","the computer is off"),
-            ("the fan is on","switch off","the fan is off"),("the heater is on","switch off","the heater is off"),
-            ("the oven is on","switch off","the oven is off"),("the speaker is on","switch off","the speaker is off"),
-        ],
-        "precondition": "is on",
-        "property_changed": "power",
-    },
-    "put_inside": {
-        "triples": [
-            ("the ball is outside the box","put in","the ball is inside the box"),
-            ("the toy is outside the bag","put in","the toy is inside the bag"),
-            ("the book is outside the drawer","put in","the book is inside the drawer"),
-            ("the key is outside the pocket","put in","the key is inside the pocket"),
-            ("the coin is outside the jar","put in","the coin is inside the jar"),
-            ("the pen is outside the case","put in","the pen is inside the case"),
-            ("the shirt is outside the closet","put in","the shirt is inside the closet"),
-            ("the food is outside the fridge","put in","the food is inside the fridge"),
-            ("the tool is outside the shed","put in","the tool is inside the shed"),
-            ("the letter is outside the envelope","put in","the letter is inside the envelope"),
-        ],
-        "precondition": "outside",
-        "property_changed": "containment",
-    },
+# Properties and their possible values (the model doesn't see this structure)
+PROPERTY_DEFS = {
+    "temperature": ["cold", "warm", "hot", "boiling"],
+    "openness": ["closed", "open"],
+    "power": ["off", "on"],
+    "fullness": ["empty", "full"],
+    "integrity": ["intact", "broken"],
+    "position": "on the {surface} -> on the floor",
+    "containment": "outside the {container} -> inside the {container}",
 }
 
-# Chain effects: action on state A causes additional effect on state B
+# Objects and their properties. This is the WORLD — not rules.
+# The model never sees this dict. It only sees observations generated from it.
+OBJECTS = {
+    # Temperature objects (can be heated/cooled)
+    "water": {"temperature": True}, "soup": {"temperature": True},
+    "coffee": {"temperature": True}, "tea": {"temperature": True},
+    "milk": {"temperature": True}, "food": {"temperature": True},
+    "oil": {"temperature": True}, "pan": {"temperature": True},
+    "iron": {"temperature": True}, "metal": {"temperature": True},
+    # Openable objects
+    "door": {"openness": True}, "window": {"openness": True},
+    "box": {"openness": True}, "jar": {"openness": True},
+    "gate": {"openness": True}, "drawer": {"openness": True},
+    "lid": {"openness": True}, "bag": {"openness": True},
+    "bottle": {"openness": True}, "cabinet": {"openness": True},
+    # Powered objects
+    "lamp": {"power": True, "surface": "table", "fragile": True, "integrity": True},
+    "light": {"power": True}, "screen": {"power": True},
+    "tv": {"power": True}, "radio": {"power": True},
+    "computer": {"power": True}, "fan": {"power": True},
+    "heater": {"power": True}, "oven": {"power": True},
+    "speaker": {"power": True},
+    # Fillable objects
+    "cup": {"fullness": True, "surface": "shelf", "fragile": True, "integrity": True},
+    "glass": {"fullness": True, "surface": "table", "fragile": True, "integrity": True},
+    "bowl": {"fullness": True, "fragile": True, "integrity": True},
+    "pot": {"fullness": True}, "tub": {"fullness": True},
+    "bucket": {"fullness": True}, "jug": {"fullness": True},
+    "tank": {"fullness": True}, "pool": {"fullness": True},
+    # Breakable objects
+    "plate": {"integrity": True, "surface": "counter", "fragile": True},
+    "vase": {"integrity": True, "fragile": True, "surface": "shelf"},
+    "mirror": {"integrity": True},
+    # Positional objects (on a surface)
+    "ball": {"surface": "table"}, "book": {"surface": "desk"},
+    "phone": {"surface": "bed"}, "toy": {"surface": "shelf"},
+    "pen": {"surface": "desk"}, "remote": {"surface": "couch"},
+    # Containment objects (inside/outside a container)
+    "key": {"container": "pocket"}, "coin": {"container": "jar"},
+    "letter": {"container": "envelope"}, "shirt": {"container": "closet"},
+    "tool": {"container": "shed"}, "food_c": {"container": "fridge"},
+    "ball_c": {"container": "box"}, "toy_c": {"container": "bag"},
+    "pen_c": {"container": "case"}, "book_c": {"container": "drawer"},
+}
+
+# Actions: what they do. Each action changes one property value to another.
+ACTIONS = {
+    "heat":       {"property": "temperature", "from": "cold", "to": "hot"},
+    "cool":       {"property": "temperature", "from": "hot", "to": "cold"},
+    "warm up":    {"property": "temperature", "from": "cold", "to": "warm"},
+    "boil":       {"property": "temperature", "from": "hot", "to": "boiling"},
+    "simmer":     {"property": "temperature", "from": "boiling", "to": "hot"},
+    "open":       {"property": "openness", "from": "closed", "to": "open"},
+    "close":      {"property": "openness", "from": "open", "to": "closed"},
+    "switch on":  {"property": "power", "from": "off", "to": "on"},
+    "switch off": {"property": "power", "from": "on", "to": "off"},
+    "fill":       {"property": "fullness", "from": "empty", "to": "full"},
+    "drop":       {"property": "integrity", "from": "intact", "to": "broken"},
+    "push":       {"property": "position", "from": "surface", "to": "floor"},
+    "put in":     {"property": "containment", "from": "outside", "to": "inside"},
+}
+
+def generate_world_observations():
+    """Generate all valid (state, action, result) from the world definition.
+    This replaces hardcoded TRANSITION_RULES."""
+    observations = []
+    rule_groups = defaultdict(list)
+
+    for obj_name, obj_props in OBJECTS.items():
+        for act_name, act_def in ACTIONS.items():
+            prop = act_def["property"]
+
+            # Check if object has this property
+            if prop == "temperature" and not obj_props.get("temperature"):
+                continue
+            if prop == "openness" and not obj_props.get("openness"):
+                continue
+            if prop == "power" and not obj_props.get("power"):
+                continue
+            if prop == "fullness" and not obj_props.get("fullness"):
+                continue
+            if prop == "integrity" and not obj_props.get("integrity"):
+                continue
+            if prop == "position" and "surface" not in obj_props:
+                continue
+            if prop == "containment" and "container" not in obj_props:
+                continue
+
+            # Build state and result text
+            display = obj_name.split("_")[0]  # food_c → food, ball_c → ball
+            if prop == "position":
+                surface = obj_props["surface"]
+                state = f"the {display} is on the {surface}"
+                result = f"the {display} is on the floor"
+            elif prop == "containment":
+                container = obj_props["container"]
+                state = f"the {display} is outside the {container}"
+                result = f"the {display} is inside the {container}"
+            else:
+                state = f"the {display} is {act_def['from']}"
+                result = f"the {display} is {act_def['to']}"
+
+            obs = {
+                "state": state, "action": act_name, "result": result,
+                "property": prop, "object": display,
+                "fragile": obj_props.get("fragile", False),
+            }
+            observations.append(obs)
+            rule_groups[act_name].append(obs)
+
+    return observations, rule_groups
+
+# Generate the world
+ALL_OBSERVATIONS, RULE_GROUPS = generate_world_observations()
+
+# Build TRANSITION_RULES for backward compatibility
+TRANSITION_RULES = {}
+for act_name, obs_list in RULE_GROUPS.items():
+    triples = [(o["state"], o["action"], o["result"]) for o in obs_list]
+    if triples:
+        first = obs_list[0]
+        precond = first.get("from_val", ACTIONS[act_name]["from"]).split()[0]
+        TRANSITION_RULES[act_name] = {
+            "triples": triples,
+            "precondition": precond,
+            "property_changed": first["property"],
+        }
+
+# Chain effects: generated automatically from fragile objects
 CHAIN_EFFECTS = [
-    # push a fragile object → falls AND breaks
-    {"trigger_rule": "gravity", "trigger_objects": ["glass","plate","vase","cup","bowl","lamp"],
-     "chain_rule": "break", "description": "fragile object falls and breaks"},
+    {"trigger_action": "push", "chain_action": "drop",
+     "condition": "fragile", "description": "fragile object falls and breaks"},
 ]
 
+CHAIN_TRIPLES = []
+for ce in CHAIN_EFFECTS:
+    trigger_obs = RULE_GROUPS.get(ce["trigger_action"], [])
+    chain_obs = RULE_GROUPS.get(ce["chain_action"], [])
+    chain_by_obj = {o["object"]: o for o in chain_obs}
+    for obs in trigger_obs:
+        if obs.get(ce["condition"], False) and obs["object"] in chain_by_obj:
+            co = chain_by_obj[obs["object"]]
+            CHAIN_TRIPLES.append({
+                "state": obs["state"], "action": obs["action"],
+                "result": co["result"], "intermediate": obs["result"],
+                "rules": [ce["trigger_action"], ce["chain_action"]],
+                "object": obs["object"],
+            })
+
+print(f"World: {len(ALL_OBSERVATIONS)} observations, {len(RULE_GROUPS)} actions, {len(CHAIN_TRIPLES)} chain effects")
+for act in sorted(RULE_GROUPS):
+    obs = RULE_GROUPS[act]
+    print(f"  {act:12s}: {len(obs):2d} obs ({obs[0]['property']})")
+if CHAIN_TRIPLES:
+    print(f"Chain effects ({len(CHAIN_TRIPLES)}):")
+    for ct in CHAIN_TRIPLES[:3]:
+        print(f"  '{ct['state'][:30]}' + '{ct['action']}' -> '{ct['result'][:25]}'")
 ALL_ACTIONS = sorted(set(a for r in TRANSITION_RULES.values() for _,a,_ in r["triples"]))
 ACT2IDX = {a:i for i,a in enumerate(ALL_ACTIONS)}
 IDX2ACT = {i:a for a,i in ACT2IDX.items()}
@@ -211,6 +247,9 @@ def build_vocab():
     ss = set()
     for r in TRANSITION_RULES.values():
         for s,a,res in r["triples"]: ss.add(s); ss.add(res)
+    # Also include chain effect states
+    for ct in CHAIN_TRIPLES:
+        ss.add(ct["state"]); ss.add(ct["result"]); ss.add(ct["intermediate"])
     sl = sorted(ss)
     return sl, {s:i for i,s in enumerate(sl)}, {i:s for i,s in enumerate(sl)}
 
@@ -289,6 +328,8 @@ class TokenEmbeddingCache:
         for r in TRANSITION_RULES.values():
             phrases.add(f" {r['precondition']}")
             phrases.add(f" {r['property_changed']}")
+        for ct in CHAIN_TRIPLES:
+            phrases.add(f" {ct['state']}"); phrases.add(f" {ct['result']}"); phrases.add(f" {ct['intermediate']}")
         print(f"  {len(phrases)} phrases...")
         gpt2.eval()
         with torch.no_grad():
@@ -375,8 +416,49 @@ def generate_multistep_task(cache, s2i, chains, num_examples=3):
         "step_rules": test["rules"],
     }
 
+def generate_chain_effect_task(cache, s2i, num_examples=3):
+    """Generate a task where an action causes a chain effect.
+    Example: push glass on table → glass is broken (gravity + break)."""
+    if not CHAIN_TRIPLES:
+        return generate_single_task(cache, s2i)
+    ct = random.choice(CHAIN_TRIPLES)
+
+    # Examples: show gravity examples (what push does normally)
+    # AND break examples (what happens to fragile objects)
+    gravity_triples = TRANSITION_RULES["push"]["triples"]
+    break_triples = TRANSITION_RULES["drop"]["triples"]
+    gex = random.sample(gravity_triples, min(2, len(gravity_triples)))
+    bex = random.sample(break_triples, min(2, len(break_triples)))
+    examples = gex + bex
+    example_reprs = torch.stack([
+        torch.cat([cache.get(f" {s}"), cache.get(f" {a}"), cache.get(f" {r}")])
+        for s, a, r in examples
+    ])
+
+    return {
+        "example_reprs": example_reprs,
+        "test_state": cache.get(f" {ct['state']}"),
+        "test_action": cache.get(f" {ct['action']}"),
+        "test_state_tokens": cache.get_tokens(f" {ct['state']}"),
+        "target_idx": s2i.get(ct["result"], 0),
+        "rule_name": "chain:" + "+".join(ct["rules"]),
+        "state": ct["state"], "action": ct["action"], "expected": ct["result"],
+        "depth": 1, "task_type": "chain_effect",
+        "result_state_vec": cache.get(f" {ct['result']}"),
+        "action_idx": ACT2IDX[ct["action"]],
+        "precondition": "on the",
+        "property_changed": "position",
+        "precondition_holds": True,
+        "property_idx": PROP2IDX["position"],
+        "chain_intermediate": ct["intermediate"],
+        "chain_object": ct["object"],
+    }
+
 def generate_mixed_task(cache, s2i, chains, ne=5):
-    if random.random()<CONFIG["multistep_ratio"] and any(chains.get(d) for d in [2,3]):
+    r = random.random()
+    if r < CONFIG["chain_effect_ratio"] and CHAIN_TRIPLES:
+        return generate_chain_effect_task(cache, s2i)
+    if r < CONFIG["chain_effect_ratio"] + CONFIG["multistep_ratio"] and any(chains.get(d) for d in [2,3]):
         return generate_multistep_task(cache, s2i, chains, 3)
     return generate_single_task(cache, s2i, ne)
 
@@ -704,17 +786,33 @@ class ActionScorer(nn.Module):
 # Generator
 # =============================================================================
 
-class ResultGenerator(nn.Module):
+class LatentPredictor(nn.Module):
+    """Predicts the next state VECTOR in latent space.
+    This is the core World Model output — operates entirely in embedding space.
+    No vocabulary, no discrete states. Just continuous vectors."""
+    def __init__(self, sd, action_dim, pattern_dim):
+        super().__init__()
+        input_dim = sd + sd + action_dim + pattern_dim
+        self.h = nn.Sequential(
+            nn.Linear(input_dim, sd*2), nn.LayerNorm(sd*2), nn.GELU(),
+            nn.Linear(sd*2, sd*2), nn.LayerNorm(sd*2), nn.GELU(),
+            nn.Linear(sd*2, sd))
+    def forward(self, obj, prop, action, sig):
+        return self.h(torch.cat([obj, prop, action, sig]))
+
+class VocabDecoder(nn.Module):
+    """Decodes a latent state vector into vocabulary logits.
+    Receives the predicted vector PLUS context (object, action, signature)
+    to disambiguate between similar states."""
     def __init__(self, sd, action_dim, pattern_dim, vocab_size):
         super().__init__()
-        # object + transformed_property + action + signature
-        input_dim = sd + sd + action_dim + pattern_dim
+        input_dim = sd + sd + action_dim + pattern_dim  # pred_vec + obj + action + sig
         self.h = nn.Sequential(
             nn.Linear(input_dim, sd), nn.LayerNorm(sd), nn.GELU(), nn.Dropout(0.1),
             nn.Linear(sd, sd), nn.LayerNorm(sd), nn.GELU(),
             nn.Linear(sd, vocab_size))
-    def forward(self, obj, prop, action, sig):
-        return self.h(torch.cat([obj, prop, action, sig]))
+    def forward(self, pred_vec, obj, action, sig):
+        return self.h(torch.cat([pred_vec, obj, action, sig]))
 
 
 # =============================================================================
@@ -737,8 +835,9 @@ class CompleteWorldModel(nn.Module):
         # Reasoner
         self.goal_eval = GoalEvaluator(state_dim).to(DEVICE)
         self.action_scorer = ActionScorer(state_dim, NUM_ACTIONS).to(DEVICE)
-        # Output
-        self.gen = ResultGenerator(state_dim, state_dim, cfg["proj_dim"], vocab_size).to(DEVICE)
+        # Output: latent predictor (primary) + vocab decoder (for eval)
+        self.latent_pred = LatentPredictor(state_dim, state_dim, cfg["proj_dim"]).to(DEVICE)
+        self.vocab_dec = VocabDecoder(state_dim, state_dim, cfg["proj_dim"], vocab_size).to(DEVICE)
         self.mem = Memory(cfg["memory_capacity"])
         self.world = WorldState()
 
@@ -790,11 +889,14 @@ class CompleteWorldModel(nn.Module):
         else:
             transformed = self.prop_updater(prop_vec, test_action, prog, self.lib)
 
-        logits = self.gen(obj_vec, transformed, test_action, sig)
-        return logits, prog, sig, from_mem, stop_probs, obj_attn, slot_attn, slot_weights, obj_vec, precond_score
+        # Predict next state in LATENT SPACE (primary output)
+        pred_vec = self.latent_pred(obj_vec, transformed, test_action, sig)
+        # Decode to vocabulary with full context
+        logits = self.vocab_dec(pred_vec, obj_vec, test_action, sig)
+        return logits, prog, sig, from_mem, stop_probs, obj_attn, slot_attn, slot_weights, obj_vec, precond_score, pred_vec
 
     def plan(self, cache, initial_state, goal_state, max_depth=3):
-        """Plan using ActionScorer + real World Model simulation."""
+        """Plan entirely in latent space. No vocabulary lookup needed."""
         self.eval()
         with torch.no_grad():
             sv = cache.get(f" {initial_state}")
@@ -816,14 +918,14 @@ class CompleteWorldModel(nn.Module):
                 action_name = IDX2ACT[ai]
                 plan.append(action_name)
 
-                # 2. Simulate through World Model
+                # 2. Simulate through World Model in LATENT SPACE
                 action_vec = cache.get(f" {action_name}")
                 obj_vec, _ = self.obj_ext(current_tokens)
                 slots, _ = self.slot_attn(current_tokens)
                 slot_weights = self.slot_selector(action_vec)
                 prop_vec = (slot_weights.unsqueeze(1) * slots).sum(0)
 
-                # Synthesize program for this action
+                # Synthesize program
                 rule_name = None
                 for rn, r in TRANSITION_RULES.items():
                     if r["triples"][0][1] == action_name:
@@ -844,15 +946,21 @@ class CompleteWorldModel(nn.Module):
                     sig = self.syn.signature(torch.zeros(1, self.sd*3, device=DEVICE))
 
                 transformed = self.prop_updater(prop_vec, action_vec, step_prog, self.lib)
-                logits = self.gen(obj_vec, transformed, action_vec, sig)
-                pred_idx = logits.argmax().item()
 
-                # Update state for next step
-                pred_state = i2s_global.get(pred_idx, None)
-                if pred_state and f" {pred_state}" in cache.last_cache:
-                    current_state_vec = cache.get(f" {pred_state}")
-                    current_tokens = cache.get_tokens(f" {pred_state}")
-                    # Check if we've reached the goal
+                # Predict next state as VECTOR (no vocab lookup)
+                pred_vec = self.latent_pred(obj_vec, transformed, action_vec, sig)
+
+                # Use predicted vector directly as next state
+                # Find closest known state for token access (needed for SlotAttention)
+                best_sim, best_state = -1, None
+                for phrase, vec in cache.last_cache.items():
+                    sim = F.cosine_similarity(pred_vec.unsqueeze(0), vec.unsqueeze(0)).item()
+                    if sim > best_sim:
+                        best_sim = sim; best_state = phrase
+
+                if best_state and best_sim > 0.7:
+                    current_state_vec = pred_vec  # use PREDICTED vector, not cached
+                    current_tokens = cache.get_tokens(best_state)  # nearest tokens for slot attn
                     if self.goal_eval(current_state_vec, gv).item() > 0.85:
                         break
                 else:
@@ -929,10 +1037,16 @@ def train_cycle(model, cache, s2i, i2s, chains, tokenizer, all_sv, n_iters, cycl
     for it in range(n_iters):
         task=generate_mixed_task(cache,s2i,chains)
         np_=model.lib.n
-        logits,prog,sig,_,stop_probs,oa,sa,sw,obj_vec,precond_sc = model(task,cfg["temperature"],use_mem=False)
+        logits,prog,sig,_,stop_probs,oa,sa,sw,obj_vec,precond_sc,pred_vec = model(task,cfg["temperature"],use_mem=False)
 
+        # PRIMARY loss: cosine similarity in latent space
+        target_vec = task["result_state_vec"].to(DEVICE)
+        latent_loss = 1.0 - F.cosine_similarity(pred_vec.unsqueeze(0), target_vec.unsqueeze(0))
+
+        # AUXILIARY loss: cross-entropy on vocabulary (helps decoder learn)
         tgt=torch.tensor(task["target_idx"],device=DEVICE)
         lce=F.cross_entropy(logits.unsqueeze(0),tgt.unsqueeze(0))
+
         stop_l=torch.tensor(0.0,device=DEVICE)
         if stop_probs:
             for sp in stop_probs: stop_l=stop_l+(1.0-sp).squeeze()
@@ -948,7 +1062,7 @@ def train_cycle(model, cache, s2i, i2s, chains, tokenizer, all_sv, n_iters, cycl
         precond_target = torch.tensor(1.0 if task["precondition_holds"] else 0.0, device=DEVICE)
         precond_loss = F.binary_cross_entropy(precond_sc.view(-1)[0], precond_target)
 
-        loss=(lce+0.1*div_loss(prog)+0.05*use_loss(prog,np_)+0.1*novelty_loss(prog,np_)+
+        loss=(lce + 0.2*latent_loss + 0.1*div_loss(prog)+0.05*use_loss(prog,np_)+0.1*novelty_loss(prog,np_)+
               0.03*stop_l+0.02*len(prog)+cfg["goal_loss_weight"]*gl+
               cfg["action_loss_weight"]*al_loss+cfg["precondition_loss_weight"]*precond_loss)/cfg["grad_accumulation"]
         loss.backward()
@@ -967,12 +1081,12 @@ def train_cycle(model, cache, s2i, i2s, chains, tokenizer, all_sv, n_iters, cycl
             speed=(it+1)/max(time.time()-t0,0.01)
             with torch.no_grad():
                 t=generate_mixed_task(cache,s2i,chains)
-                lg,pr,_,_,_,oa2,sa2,sw2,_,pc=model(t,cfg["temperature"],use_mem=False)
+                lg,pr,_,_,_,oa2,sa2,sw2,_,pc,_=model(t,cfg["temperature"],use_mem=False)
                 pw=i2s.get(lg.argmax().item(),"?"); tw=t["expected"]
                 st=t["state"]
                 ostr=fmt_attn(oa2,tokenizer,f" {st}")
             ms=f" [D{t['depth']}]" if t.get("task_type")=="multistep" else ""
-            print(f"  [C{cycle}] {it:4d}/{n_iters} | WM:{lce.item():.2f} G:{gl.item():.2f} A:{al_loss.item():.2f} P:{precond_loss.item():.2f} | "
+            print(f"  [C{cycle}] {it:4d}/{n_iters} | WM:{lce.item():.2f} L:{latent_loss.item():.2f} G:{gl.item():.2f} A:{al_loss.item():.2f} P:{precond_loss.item():.2f} | "
                   f"Acc:{acc:4.0f}% Act:{pacc:4.0f}% | {speed:.0f}it/s | [{t['rule_name'][:12]:12s}] {'V' if pw==tw else 'X'} K={len(pr)}{ms}")
             print(f"    '{st[:22]}' + '{t['action'][:10]}' -> '{pw[:22]}' want:'{tw[:22]}'")
             print(f"    obj:{ostr}  slots:{fmt_slots(sw2)}  precond:{pc.item():.2f}")
@@ -986,7 +1100,7 @@ def evaluate(model, cache, s2i, i2s, chains, tokenizer):
     with torch.no_grad():
         for rule in sorted(TRANSITION_RULES.keys()):
             t=generate_single_task(cache,s2i,rule_name=rule)
-            _,pr,_,_,_,oa,sa,sw,_,pc=model(t,0.1,use_mem=False)
+            _,pr,_,_,_,oa,sa,sw,_,pc,_=model(t,0.1,use_mem=False)
             st=t["state"]; prop=TRANSITION_RULES[rule]["property_changed"]
             print(f"    {rule:12s}: {fmt(pr,names)} K={len(pr)}  obj:{fmt_attn(oa,tokenizer,f' {st}')}  "
                   f"slots:{fmt_slots(sw)}  precond:{pc.item():.2f}  prop_type:{prop}")
@@ -998,7 +1112,7 @@ def evaluate(model, cache, s2i, i2s, chains, tokenizer):
             ok,t3ok,shown=0,0,0
             for _ in range(ne):
                 t=generate_single_task(cache,s2i,rule_name=rule)
-                lg,_,_,_,_,oa,sa,sw,_,pc=model(t,0.1,use_mem=True)
+                lg,_,_,_,_,oa,sa,sw,_,pc,_=model(t,0.1,use_mem=True)
                 pred,target=i2s.get(lg.argmax().item(),"?"),t["expected"]
                 top3=[i2s.get(i,"?") for i in lg.topk(min(3,lg.shape[0])).indices.tolist()]
                 ok+=pred==target; t3ok+=target in top3
@@ -1017,14 +1131,29 @@ def evaluate(model, cache, s2i, i2s, chains, tokenizer):
     n=len(results); ov=sum(a for a,_ in results.values())/n; ov3=sum(t for _,t in results.values())/n
     print(f"\n    SINGLE-STEP: {ov:.1f}% (top3: {ov3:.1f}%)")
 
-    # Slot analysis: do same-property-type actions use the same slot?
+    # Latent similarity: how close are predicted vectors to target vectors?
+    print("\n  --- Latent Similarity ---")
+    lat_sims = []
+    with torch.no_grad():
+        for rule in sorted(TRANSITION_RULES.keys()):
+            rule_sims = []
+            for _ in range(5):
+                t = generate_single_task(cache, s2i, rule_name=rule)
+                _,_,_,_,_,_,_,_,_,_,pv = model(t, 0.1, use_mem=False)
+                tv = t["result_state_vec"].to(DEVICE)
+                sim = F.cosine_similarity(pv.unsqueeze(0), tv.unsqueeze(0)).item()
+                rule_sims.append(sim); lat_sims.append(sim)
+            print(f"    {rule:12s}: cos_sim={sum(rule_sims)/len(rule_sims):.3f}")
+    print(f"    AVERAGE: {sum(lat_sims)/len(lat_sims):.3f}")
+
+    # Slot analysis
     print("\n  --- Slot Analysis ---")
     prop_slots = defaultdict(list)
     with torch.no_grad():
         for rule, r in TRANSITION_RULES.items():
             for s,a,res in r["triples"][:3]:
                 t = generate_single_task(cache, s2i, rule_name=rule)
-                _,_,_,_,_,_,_,sw,_,_ = model(t, 0.1, use_mem=False)
+                _,_,_,_,_,_,_,sw,_,_,_ = model(t, 0.1, use_mem=False)
                 prop_slots[r["property_changed"]].append(sw.argmax().item())
     for prop, slots in sorted(prop_slots.items()):
         dominant = Counter(slots).most_common(1)[0]
@@ -1039,12 +1168,53 @@ def evaluate(model, cache, s2i, i2s, chains, tokenizer):
             for _ in range(min(50,len(chains[depth]))):
                 t=generate_multistep_task(cache,s2i,chains,3)
                 if t["depth"]!=depth: continue
-                lg,_,_,_,_,_,_,_,_,_=model(t,0.1,use_mem=False)
+                lg,_,_,_,_,_,_,_,_,_,_=model(t,0.1,use_mem=False)
                 pred=i2s.get(lg.argmax().item(),"?"); ok+=pred==t["expected"]; tested+=1
                 if tested<=3:
                     print(f"    '{t['state'][:20]}' +[{t['action'][:20]}]")
                     print(f"      -> '{pred[:25]}' want:'{t['expected'][:25]}' {'V' if pred==t['expected'] else 'X'}")
         if tested: print(f"    DEPTH-{depth}: {100*ok/tested:.0f}% [{tested} tested]")
+
+    # Chain Effects
+    if CHAIN_TRIPLES:
+        print(f"\n  --- Chain Effects (push fragile → breaks) ---")
+        ce_ok, ce_top3, ce_tested = 0, 0, 0
+        with torch.no_grad():
+            for ct in CHAIN_TRIPLES:
+                t = generate_chain_effect_task(cache, s2i)
+                lg,_,_,_,_,_,_,_,_,_,_ = model(t, 0.1, use_mem=False)
+                pred = i2s.get(lg.argmax().item(), "?")
+                top3 = [i2s.get(i,"?") for i in lg.topk(min(3,lg.shape[0])).indices.tolist()]
+                correct = pred == t["expected"]
+                t3 = t["expected"] in top3
+                ce_ok += correct; ce_top3 += t3; ce_tested += 1
+                if ce_tested <= 5:
+                    inter = t.get("chain_intermediate","")
+                    print(f"    '{t['state'][:22]}' + '{t['action']}' -> '{pred[:22]}' {'V' if correct else 'X'}")
+                    print(f"      want:'{t['expected'][:22]}'  via:'{inter[:22]}'  obj:{t.get('chain_object','?')}")
+        if ce_tested:
+            print(f"    CHAIN EFFECTS: {100*ce_ok/ce_tested:.0f}% (top3: {100*ce_top3/ce_tested:.0f}%) [{ce_tested} tested]")
+
+    # Graded Temperature Test
+    graded_rules = ["warm_up", "boil", "simmer", "warm_cool"]
+    graded_exist = [r for r in graded_rules if r in TRANSITION_RULES]
+    if graded_exist:
+        print(f"\n  --- Graded Temperature ---")
+        gr_ok, gr_tested = 0, 0
+        with torch.no_grad():
+            for rname in graded_exist:
+                r = TRANSITION_RULES[rname]
+                for s, a, res in r["triples"]:
+                    t = generate_single_task(cache, s2i, rule_name=rname)
+                    lg,_,_,_,_,_,_,_,_,_,_ = model(t, 0.1, use_mem=False)
+                    pred = i2s.get(lg.argmax().item(), "?")
+                    correct = pred == t["expected"]
+                    gr_ok += correct; gr_tested += 1
+                    if gr_tested <= 6:
+                        print(f"    [{rname:10s}] '{t['state'][:20]}' + '{t['action'][:8]}' -> '{pred[:22]}' {'V' if correct else 'X'}")
+                        print(f"      want:'{t['expected'][:22]}'")
+        if gr_tested:
+            print(f"    GRADED TEMP: {100*gr_ok/gr_tested:.0f}% [{gr_tested} tested]")
 
     # Planning
     print(f"\n  --- Planning ---")
@@ -1119,7 +1289,7 @@ def main():
     with torch.no_grad():
         for _ in range(200):
             t=generate_single_task(cache,s2i)
-            _,pr,_,_,_,_,_,_,_,_=model(t,0.1,use_mem=False)
+            _,pr,_,_,_,_,_,_,_,_,_=model(t,0.1,use_mem=False)
             for sel in pr: usage[model.lib.names[sel.argmax().item()] if sel.argmax().item()<len(model.lib.names) else "?"]+=1
     tu=sum(usage.values())
     for nm,cnt in sorted(usage.items(),key=lambda x:-x[1]): print(f"    {nm:20s}: {100*cnt/tu:5.1f}%")
