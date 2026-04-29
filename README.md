@@ -10,23 +10,28 @@
 
 ## What is this?
 
-NPR is an architecture that **discovers interpretable programs** from a few examples. Instead of encoding rules implicitly in billions of parameters like a Transformer, NPR builds explicit programs from composable neural primitives that you can **read**, **modify**, and **reuse**.
+NPR is an architecture that **discovers rule programs** from a few examples using composable neural primitives. Instead of encoding knowledge implicitly in billions of parameters, NPR builds explicit programs you can **trace**, **modify**, and **reuse**.
+
+The project spans three parts, from linguistic analogy to a visual world model:
 
 ```
-Input: 5 examples of a relationship (e.g., "hot→cold", "big→small", ...)
-  ↓
-NPR discovers: IDENTITY → MORPH  (a 2-step program)
-  ↓
-Applies to new input: "loud" → "quiet" ✓
+Part I:   Text → GPT-2 → discovers linguistic rules      → 98.8% compositional
+Part II:  Text → GPT-2 → discovers physical rules         → 100% single-step, 95% depth-3
+Part III: Image → ViT  → discovers physical rules (JEPA)  → 99.6% single-step, latent space only
 ```
 
-## Two Modes
+---
+
+## Three Parts
 
 ### Part I: Linguistic Analogy (Google Analogy Dataset)
 NPR discovers rules for word relationships and composes them for multi-relation reasoning. **98.8% on compositional tasks.**
 
-### Part II: World Model (Physical Rule Discovery)
-NPR implements LeCun's three-module architecture (Perceiver, World Model, Reasoner) to discover physical rules, simulate state transitions, and plan actions — all in latent space. **100% single-step accuracy on 13 actions.**
+### Part II: Text World Model (Physical Rule Discovery)
+NPR implements LeCun's three-module architecture (Perceiver, World Model, Reasoner) with GPT-2 as perceiver. Discovers physical rules from text, simulates state transitions, plans actions. **100% single-step accuracy on 13 actions.**
+
+### Part III: JEPA Visual World Model
+Replaces GPT-2 with frozen ViT. Learns from synthetic scene images. Predicts entirely in latent space — no vocabulary, no decoder. Model-based planning via World Model simulation. Includes generalization tests on held-out objects, counterfactual visuals, and cross-property transfer. **99.6% single-step, 0.986 latent similarity.**
 
 ---
 
@@ -34,102 +39,145 @@ NPR implements LeCun's three-module architecture (Perceiver, World Model, Reason
 
 ### Part I: NPR vs GPT-2 on Google Analogy
 
-**NPR wins on 8/12 relations.** Overall: NPR 36.2% vs GPT-2 28.0%.
-
-Compositional tasks (chaining two relations):
+**NPR wins on 8/12 relations.** Compositional tasks:
 ```
-    capital + currency:      100% (top3: 100%)  K=6
-    capital + nationality:   100% (top3: 100%)  K=6
-    participle + past:        96% (top3: 100%)  K=6
-    OVERALL:                98.8% (top3: 100%)
+capital + currency:      100%    K=6
+capital + nationality:   100%    K=6
+participle + past:        96%    K=6
+OVERALL:                98.8%    (top3: 100%)
 ```
 
-### Part II: World Model
-
-**100% single-step accuracy — all 13 actions at 100%**
+### Part II: Text World Model
 
 | Metric | Result |
 |--------|--------|
 | Single-step (13/13 actions) | **100%** |
-| Top-3 accuracy | **100%** |
-| Depth-2 compositional chains | **64%** |
 | Depth-3 compositional chains | **95%** |
 | Chain effects (push fragile → breaks) | **100%** |
 | Graded temperature (cold→warm→hot→boiling) | **100%** |
-| Latent similarity (cosine to target) | **0.93** |
-| Planning: first action correct (real) | **62%** |
-| Planning: full plan correct (real) | **54%** |
+| Latent similarity | **0.93** |
+| Planning first action (real) | **62%** |
 
-The model learns all compositional structure **autonomously** — no hardcoded inverse pairs or architectural hacks.
+### Part III: JEPA Visual World Model
+
+| Metric | Result |
+|--------|--------|
+| Single-step NN (nearest neighbor) | **99.6%** |
+| Latent similarity (avg cosine) | **0.986** |
+| Depth-2 compositional chains | **77-100%** |
+| Depth-3 compositional chains | **78-87%** |
+| Planning first action (real) | **57-60%** |
+
+All learned autonomously — no hardcoded inverse pairs, no vocabulary, no architectural hacks.
 
 ---
 
 ## Architecture
 
-### Part II: World Model (LeCun's Three Modules)
+### Part III: JEPA World Model
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  MODULE 1 — PERCEIVER                                │
-│  GPT-2 frozen → ObjectExtractor → SlotAttention      │
-│  Discovers: object identity + property decomposition │
-└────────┬────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────┐
-│  MODULE 2 — WORLD MODEL                              │
-│  RuleSynthesizer (state-conditioned)                 │
-│  PropertyUpdater (FiLM + Householder NEGATE)         │
-│  LatentPredictor → 768-dim state vector              │
-│  VocabDecoder (pred + obj + action + sig → vocab)    │
-│  Per-step program synthesis for multi-step chains    │
-└────────┬────────────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────────────────────────┐
-│  MODULE 3 — REASONER                                 │
-│  GoalEvaluator (contrastive state similarity)        │
-│  ActionScorer (supervised action prediction)         │
-│  Planning in latent space with repeat penalty        │
-└─────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────┐
+│  PERCEIVER                                             │
+│  ViT (frozen) → 768-dim CLS + 196 patch tokens        │
+│  ObjectExtractor → object identity vector              │
+│  SlotAttention → property decomposition (2 slots)      │
+│  SlotSelector → which property does this action affect? │
+└────────┬──────────────────────────────────────────────┘
+         ↓
+┌───────────────────────────────────────────────────────┐
+│  WORLD MODEL                                           │
+│  RuleSynthesizer → program from 3-5 examples           │
+│  PrimitiveLibrary → 6 base + invented primitives       │
+│     IDENTITY, NEGATE (Householder), MORPH, ASSOCIATE,  │
+│     LOOKUP, BLEND + cyclic compressed primitives       │
+│  PropertyUpdater → FiLM conditioning + program exec    │
+│  LatentPredictor → predicted state vector (768-dim)    │
+└────────┬──────────────────────────────────────────────┘
+         ↓
+┌───────────────────────────────────────────────────────┐
+│  REASONER                                              │
+│  GoalEvaluator → are we at the goal?                   │
+│  Model-based planning → simulate all 13 actions,       │
+│     pick the one closest to goal, repeat               │
+│  No ActionScorer — World Model IS the planner          │
+└───────────────────────────────────────────────────────┘
 ```
 
 ### Key Innovations
 
-- **Householder NEGATE**: H(x) = x - 2(v·x)/(v·v)·v — structurally involutive by construction
-- **Program Universality**: All 13 actions converge to same 2-step program, differentiated by FiLM conditioning
-- **Cyclic Self-Improvement**: Frequent primitive pairs compressed into higher-level operations
-- **Autonomous Learning**: Discovers inverse relationships from generic multi-step training — no hardcoded pairs
+- **Householder NEGATE**: `H(x) = x - 2(v·x)/(v·v)·v` — structurally involutive by construction (H(H(x)) = x exactly)
+- **Model-based planning**: simulates all actions through the real World Model, picks best — no separate action predictor
+- **Predicts in latent space**: no vocabulary, no decoder — true JEPA-style prediction
+- **Cyclic Self-Improvement**: frequent primitive pairs compressed into new operations
+- **Structurally traceable**: every decision (object extraction, slot selection, program, FiLM parameters) is inspectable
+
+### Generalization Tests (Part III)
+
+Three tests address common criticisms of toy-world models:
+
+- **Held-out objects**: 2 objects per property type excluded from training, tested with rules learned from other objects
+- **Counterfactual visuals**: images rendered with wrong visual cues (e.g., "hot" rendered with cold colors) to detect renderer shortcuts
+- **Cross-property transfer**: actions applied to objects from different property types (e.g., "the door is cold + heat")
+
+---
+
+## How it differs from existing JEPA implementations
+
+| | V-JEPA 2 (Meta) | Causal-JEPA | NPR-JEPA (ours) |
+|---|---|---|---|
+| Training data | 1M+ hours video | Video sequences | 127 observations |
+| Team | 30+ researchers | Research lab | 1 person |
+| Compute | Large GPU cluster | Multi-GPU | Single T4, 40 min |
+| Interpretability | Opaque predictor | Opaque | Traceable programs |
+| Rule discovery | No | No | Yes (3-5 examples) |
+| Primitive composition | No | No | Yes + cyclic compression |
+| Householder NEGATE | No | No | Yes (exact involution) |
+| Planning | MPC with learned model | N/A | Model-based search (13 actions) |
 
 ---
 
 ## Quick Start
 
 ```bash
-pip install torch transformers
+pip install torch transformers Pillow
 
 # Part I: Linguistic Analogy
 python npr_scaled_fast.py
 
-# Part II: World Model
+# Part II: Text World Model
 python npr_world_model.py
+
+# Part III: JEPA Visual World Model
+python npr_jepa_world_model.py
 ```
 
 ### Expected Runtime
 
-| Platform | Part I | Part II |
-|----------|--------|---------|
-| NVIDIA T4 (Kaggle/Colab) | ~30 min | ~40 min |
-| CPU | ~4 hours | ~5 hours |
+| Platform | Part I | Part II | Part III |
+|----------|--------|---------|----------|
+| NVIDIA T4 (Kaggle/Colab) | ~30 min | ~40 min | ~40 min |
+| CPU | ~4 hours | ~5 hours | not recommended |
 
 ## Files
 
 | File | Description |
 |------|-------------|
 | `npr_scaled_fast.py` | **Part I** — Google Analogy + compositional tasks + probing |
-| `npr_world_model.py` | **Part II** — World Model with 13 actions, chain effects, planning |
-| `NPR_Paper.pdf` | Academic paper (Part I + Part II) |
+| `npr_world_model.py` | **Part II** — Text World Model (GPT-2 perceiver) |
+| `npr_jepa_world_model.py` | **Part III** — JEPA Visual World Model (ViT perceiver) + generalization tests |
+| `NPR_Paper.pdf` | Academic paper |
 | `README.md` | This file |
+
+---
+
+## Limitations (honest)
+
+- **Structurally traceable, not fully interpretable**: you can see which primitive is selected, but the 768-dim vector transformations are not semantically transparent
+- **Controlled environment**: discrete states, synthetic images, no real-world noise
+- **Renderer bias**: visual cues correlate with properties (steam = hot); counterfactual test measures this
+- **Greedy planning**: 1-step lookahead model-based search, no beam search or MCTS
+- **2 slots**: may not scale to complex multi-property scenes
 
 ---
 

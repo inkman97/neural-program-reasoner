@@ -1,5 +1,5 @@
 """
-Neural Program Reasoner — World Model v9: Causal Understanding + Time
+Neural Program Reasoner — World Model: Causal Understanding + Time
 
 Two key additions:
 
