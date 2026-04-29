@@ -895,15 +895,38 @@ class CompleteWorldModel(nn.Module):
         logits = self.vocab_dec(pred_vec, obj_vec, test_action, sig)
         return logits, prog, sig, from_mem, stop_probs, obj_attn, slot_attn, slot_weights, obj_vec, precond_score, pred_vec
 
+    def simulate_step(self, cache, current_tokens, action_name):
+        """Simulate one step through the real World Model."""
+        rule = TRANSITION_RULES.get(action_name)
+        if rule is None: return None, None
+        triples = rule["triples"]
+        step_triples = random.sample(triples, min(3, len(triples)))
+        step_ex = torch.stack([
+            torch.cat([cache.get(f" {s}"), cache.get(f" {a}"), cache.get(f" {res}")])
+            for s, a, res in step_triples
+        ]).to(DEVICE)
+
+        action_vec = cache.get(f" {action_name}")
+        obj_vec, _ = self.obj_ext(current_tokens)
+        slots, _ = self.slot_attn(current_tokens)
+        slot_weights = self.slot_selector(action_vec)
+        prop_vec = (slot_weights.unsqueeze(1) * slots).sum(0)
+
+        np_ = self.lib.n
+        step_prog, _, _ = self.syn(step_ex, prop_vec, 0.1, np_)
+        sig = self.syn.signature(step_ex)
+        transformed = self.prop_updater(prop_vec, action_vec, step_prog, self.lib)
+        pred_vec = self.latent_pred(obj_vec, transformed, action_vec, sig)
+        return pred_vec, action_vec
+
     def plan(self, cache, initial_state, goal_state, max_depth=3):
-        """Plan in latent space with repeat penalty and goal-aware stopping."""
+        """Plan using real World Model simulation at each step."""
         self.eval()
         with torch.no_grad():
             sv = cache.get(f" {initial_state}")
             gv = cache.get(f" {goal_state}")
             tokens = cache.get_tokens(f" {initial_state}")
 
-            # Check if already at goal
             if self.goal_eval(sv, gv).item() > 0.9:
                 return [], self.goal_eval(sv, gv).item()
 
@@ -913,10 +936,7 @@ class CompleteWorldModel(nn.Module):
             prev_action = None
 
             for step in range(max_depth):
-                # 1. ActionScorer predicts actions
                 al = self.action_scorer(current_state_vec, gv)
-
-                # Penalize repeating the same action (reduces heat,heat,heat)
                 if prev_action is not None:
                     al[prev_action] -= 2.0
 
@@ -925,39 +945,11 @@ class CompleteWorldModel(nn.Module):
                 plan.append(action_name)
                 prev_action = ai
 
-                # 2. Simulate through World Model in LATENT SPACE
-                action_vec = cache.get(f" {action_name}")
-                obj_vec, _ = self.obj_ext(current_tokens)
-                slots, _ = self.slot_attn(current_tokens)
-                slot_weights = self.slot_selector(action_vec)
-                prop_vec = (slot_weights.unsqueeze(1) * slots).sum(0)
+                # Simulate through the REAL World Model
+                pred_vec, _ = self.simulate_step(cache, current_tokens, action_name)
+                if pred_vec is None: break
 
-                # Synthesize program
-                rule_name = None
-                for rn, r in TRANSITION_RULES.items():
-                    if r["triples"][0][1] == action_name:
-                        rule_name = rn; break
-                if rule_name:
-                    r = TRANSITION_RULES[rule_name]
-                    step_triples = random.sample(r["triples"], min(3, len(r["triples"])))
-                    step_ex = torch.stack([
-                        torch.cat([cache.get(f" {s}"), cache.get(f" {a}"), cache.get(f" {res}")])
-                        for s, a, res in step_triples
-                    ]).to(DEVICE)
-                    np_ = self.lib.n
-                    step_prog, sig, _ = self.syn(step_ex, prop_vec, 0.1, np_)
-                else:
-                    np_ = self.lib.n
-                    step_prog = [F.one_hot(torch.tensor(3), np_).float().to(DEVICE),
-                                 F.one_hot(torch.tensor(1), np_).float().to(DEVICE)]
-                    sig = self.syn.signature(torch.zeros(1, self.sd*3, device=DEVICE))
-
-                transformed = self.prop_updater(prop_vec, action_vec, step_prog, self.lib)
-
-                # Predict next state as VECTOR (no vocab lookup)
-                pred_vec = self.latent_pred(obj_vec, transformed, action_vec, sig)
-
-                # Find closest known state for token access
+                # Find closest known state for next step's tokens
                 best_sim, best_state = -1, None
                 for phrase, vec in cache.last_cache.items():
                     sim = F.cosine_similarity(pred_vec.unsqueeze(0), vec.unsqueeze(0)).item()
@@ -967,7 +959,6 @@ class CompleteWorldModel(nn.Module):
                 if best_state and best_sim > 0.7:
                     current_state_vec = pred_vec
                     current_tokens = cache.get_tokens(best_state)
-                    # Goal check — stop if close enough
                     if self.goal_eval(current_state_vec, gv).item() > 0.85:
                         break
                 else:
