@@ -130,7 +130,6 @@ Three tests address common criticisms of toy-world models:
 | | V-JEPA 2 (Meta) | Causal-JEPA | NPR-JEPA (ours) |
 |---|---|---|---|
 | Training data | 1M+ hours video | Video sequences | 127 observations |
-| Team | 30+ researchers | Research lab | 1 person |
 | Compute | Large GPU cluster | Multi-GPU | Single T4, 55 min |
 | Interpretability | Opaque predictor | Opaque | Traceable programs |
 | Rule discovery | No | No | Yes (3-5 examples) |
