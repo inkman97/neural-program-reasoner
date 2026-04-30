@@ -147,13 +147,13 @@ Three tests address common criticisms of toy-world models:
 pip install torch transformers Pillow
 
 # Part I: Linguistic Analogy
-python npr_scaled_fast.py
+python npr_linguistic_reasoner.py
 
 # Part II: Text World Model
-python npr_world_model.py
+python npr_jepa_world_model_text.py
 
 # Part III: JEPA Visual World Model
-python npr_jepa_world_model.py
+python npr_jepa_world_model_visual.py
 ```
 
 ### Expected Runtime
@@ -165,13 +165,13 @@ python npr_jepa_world_model.py
 
 ## Files
 
-| File | Description |
-|------|-------------|
-| `npr_scaled_fast.py` | **Part I** — Google Analogy + compositional tasks + probing |
-| `npr_world_model.py` | **Part II** — Text World Model (GPT-2 perceiver) |
-| `npr_jepa_world_model.py` | **Part III** — JEPA Visual World Model (ViT + EMA perceiver) + generalization tests |
-| `NPR_Paper.pdf` | Academic paper (Part I + II + III) |
-| `README.md` | This file |
+| File                             | Description |
+|----------------------------------|-------------|
+| `npr_linguistic_model.py`        | **Part I** — Google Analogy + compositional tasks + probing |
+| `npr_jepa_world_model_text.py`   | **Part II** — Text World Model (GPT-2 perceiver) |
+| `npr_jepa_world_model_visual.py` | **Part III** — JEPA Visual World Model (ViT + EMA perceiver) + generalization tests |
+| `NPR_Paper.pdf`                  | Academic paper (Part I + II + III) |
+| `README.md`                      | This file |
 
 ---
 
