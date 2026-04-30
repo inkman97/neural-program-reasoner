@@ -1,6 +1,8 @@
 """
-Neural Program Reasoner — JEPA World Model
-Visual Perceiver + Latent Prediction (no vocabulary):
+Neural Program Reasoner — JEPA World Model v3
+Visual Perceiver + Latent Prediction (no vocabulary)
+
+v3 changes from v2:
   - Realistic scene-based images (not generic colored shapes)
   - Each object drawn as recognizable item (cup, door, lamp...)
   - Property shown via clear visual cues (steam, ice, flames, open/closed)
@@ -832,37 +834,51 @@ class JEPAWorldModel(nn.Module):
         pred_vec = self.latent_pred(obj_vec, transformed, action_vec, sig)
         return pred_vec
 
-    def plan(self, cache, init_state, goal_state, max_depth=3):
-        """Model-based planning: try all actions, pick the one whose
-        simulated outcome is closest to the goal. Uses the World Model
-        (99% accurate) instead of the ActionScorer."""
+    def plan(self, cache, init_state, goal_state, max_depth=3, beam_width=3):
+        """Model-based beam search planning: maintain top-k paths through
+        the World Model, pick the plan with highest final goal similarity."""
         self.eval()
         with torch.no_grad():
             sv = cache.get(init_state); gv = cache.get(goal_state)
             if self.goal_eval(sv, gv).item() > 0.9: return [], self.goal_eval(sv, gv).item()
 
-            plan = []; cur = sv; prev_action = None
             cur_tokens = cache.get_tokens(init_state)
+            # Each beam: (score, actions_list, current_vec, current_tokens, prev_action_idx)
+            beams = [(F.cosine_similarity(sv.unsqueeze(0), gv.unsqueeze(0)).item(), [], sv, cur_tokens, None)]
+            completed = []
 
-            for _ in range(max_depth):
-                # Try ALL 13 actions, simulate each, pick best
-                best_sim, best_action, best_vec = -1, None, None
-                for act_name in ALL_ACTIONS_LIST:
-                    # Skip repeating the same action
-                    if prev_action is not None and act_name == IDX2ACT.get(prev_action):
-                        continue
-                    pred = self.simulate_step(cache, cur, cur_tokens, act_name)
-                    sim = F.cosine_similarity(pred.unsqueeze(0), gv.unsqueeze(0)).item()
-                    if sim > best_sim:
-                        best_sim = sim; best_action = act_name; best_vec = pred
+            for step in range(max_depth):
+                candidates = []
+                for score, actions, cur, tokens, prev_act in beams:
+                    for act_name in ALL_ACTIONS_LIST:
+                        act_idx = ACT2IDX[act_name]
+                        # Skip repeating same action
+                        if prev_act is not None and act_idx == prev_act: continue
+                        pred = self.simulate_step(cache, cur, tokens, act_name)
+                        sim = F.cosine_similarity(pred.unsqueeze(0), gv.unsqueeze(0)).item()
+                        new_actions = actions + [act_name]
+                        candidates.append((sim, new_actions, pred, tokens, act_idx))
 
-                if best_action is None: break
-                plan.append(best_action)
-                prev_action = ACT2IDX[best_action]
-                cur = best_vec
+                if not candidates: break
+                # Keep top beam_width candidates
+                candidates.sort(key=lambda x: -x[0])
+                beams = candidates[:beam_width]
 
-                if self.goal_eval(cur, gv).item() > 0.85: break
-            return plan, self.goal_eval(cur, gv).item()
+                # Check if any beam reached the goal
+                for sim, actions, cur, tokens, prev_act in beams:
+                    if self.goal_eval(cur, gv).item() > 0.85:
+                        completed.append((sim, actions, cur))
+
+                if completed: break
+
+            # Pick best from completed or from current beams
+            if completed:
+                completed.sort(key=lambda x: -x[0])
+                best = completed[0]
+                return best[1], self.goal_eval(best[2], gv).item()
+            else:
+                best = beams[0]
+                return best[1], self.goal_eval(best[2], gv).item()
 
     def memorize(self, sig, prog, rel, ok): self.mem.store(sig,[s.argmax().item() for s in prog],rel,ok)
     def compress(self):
@@ -1326,7 +1342,7 @@ def main():
     print("Loading ViT (google/vit-base-patch16-224)...")
     vit_processor = ViTImageProcessor.from_pretrained("google/vit-base-patch16-224")
     vit_model = ViTModel.from_pretrained("google/vit-base-patch16-224").to(DEVICE)
-    # Freeze all ViT layers first
+    # Freeze all layers first
     for p in vit_model.parameters(): p.requires_grad = False
     # Unfreeze last 2 encoder layers + layernorm for domain adaptation
     for name, p in vit_model.named_parameters():
