@@ -17,7 +17,7 @@ The project spans three parts, from linguistic analogy to a visual world model:
 ```
 Part I:   Text → GPT-2 → discovers linguistic rules      → 98.8% compositional
 Part II:  Text → GPT-2 → discovers physical rules         → 100% single-step, 95% depth-3
-Part III: Image → ViT  → discovers physical rules (JEPA)  → 99.6% single-step, latent space only
+Part III: Image → ViT  → discovers physical rules (JEPA)  → 93.8% single-step, 67.7% held-out generalization
 ```
 
 ---
@@ -31,7 +31,7 @@ NPR discovers rules for word relationships and composes them for multi-relation 
 NPR implements LeCun's three-module architecture (Perceiver, World Model, Reasoner) with GPT-2 as perceiver. Discovers physical rules from text, simulates state transitions, plans actions. **100% single-step accuracy on 13 actions.**
 
 ### Part III: JEPA Visual World Model
-Replaces GPT-2 with frozen ViT. Learns from synthetic scene images. Predicts entirely in latent space — no vocabulary, no decoder. Model-based planning via World Model simulation. Includes generalization tests on held-out objects, counterfactual visuals, and cross-property transfer. **99.6% single-step, 0.986 latent similarity.**
+Replaces GPT-2 with ViT + EMA target network. Learns from synthetic scene images. Predicts entirely in latent space — no vocabulary, no decoder. Model-based planning via World Model simulation. Includes three generalization tests: held-out objects, counterfactual visuals, and cross-property transfer. **93.8% single-step, 100% counterfactual.**
 
 ---
 
@@ -62,13 +62,14 @@ OVERALL:                98.8%    (top3: 100%)
 
 | Metric | Result |
 |--------|--------|
-| Single-step NN (nearest neighbor) | **99.6%** |
-| Latent similarity (avg cosine) | **0.986** |
-| Depth-2 compositional chains | **77-100%** |
-| Depth-3 compositional chains | **78-87%** |
-| Planning first action (real) | **57-60%** |
-
-All learned autonomously — no hardcoded inverse pairs, no vocabulary, no architectural hacks.
+| Single-step NN (nearest neighbor) | **93.8%** |
+| Latent similarity (avg cosine) | **0.974** |
+| Depth-2 compositional chains | **94%** |
+| Depth-3 compositional chains | **94%** |
+| Planning first action (real) | **61%** |
+| **Held-out objects** | **67.7% (21/31)** |
+| **Counterfactual visuals** | **100% (6/6)** |
+| **Cross-property transfer** | **0% (0/6)** |
 
 ---
 
@@ -79,7 +80,8 @@ All learned autonomously — no hardcoded inverse pairs, no vocabulary, no archi
 ```
 ┌───────────────────────────────────────────────────────┐
 │  PERCEIVER                                             │
-│  ViT (frozen) → 768-dim CLS + 196 patch tokens        │
+│  ViT online (last 2 layers unfrozen, 14.2M params)    │
+│  ViT target (EMA copy, decay=0.996, no gradients)     │
 │  ObjectExtractor → object identity vector              │
 │  SlotAttention → property decomposition (2 slots)      │
 │  SlotSelector → which property does this action affect? │
@@ -107,6 +109,7 @@ All learned autonomously — no hardcoded inverse pairs, no vocabulary, no archi
 ### Key Innovations
 
 - **Householder NEGATE**: `H(x) = x - 2(v·x)/(v·v)·v` — structurally involutive by construction (H(H(x)) = x exactly)
+- **EMA target network**: online ViT adapts to domain, target ViT provides stable prediction targets — prevents representation collapse (follows BYOL/V-JEPA)
 - **Model-based planning**: simulates all actions through the real World Model, picks best — no separate action predictor
 - **Predicts in latent space**: no vocabulary, no decoder — true JEPA-style prediction
 - **Cyclic Self-Improvement**: frequent primitive pairs compressed into new operations
@@ -116,9 +119,9 @@ All learned autonomously — no hardcoded inverse pairs, no vocabulary, no archi
 
 Three tests address common criticisms of toy-world models:
 
-- **Held-out objects**: 2 objects per property type excluded from training, tested with rules learned from other objects
-- **Counterfactual visuals**: images rendered with wrong visual cues (e.g., "hot" rendered with cold colors) to detect renderer shortcuts
-- **Cross-property transfer**: actions applied to objects from different property types (e.g., "the door is cold + heat")
+- **Held-out objects (67.7%)**: 2 objects per property type excluded from training. 9/13 actions generalize perfectly to unseen objects. Fails on position/containment/fullness where objects have unique visual renderings
+- **Counterfactual visuals (100%)**: images rendered with wrong visual cues (e.g., "hot" rendered with cold colors). Model relies on rule structure, not visual shortcuts
+- **Cross-property transfer (0%)**: actions applied to objects from different property types. Structural limit of ViT embedding space
 
 ---
 
@@ -128,11 +131,12 @@ Three tests address common criticisms of toy-world models:
 |---|---|---|---|
 | Training data | 1M+ hours video | Video sequences | 127 observations |
 | Team | 30+ researchers | Research lab | 1 person |
-| Compute | Large GPU cluster | Multi-GPU | Single T4, 40 min |
+| Compute | Large GPU cluster | Multi-GPU | Single T4, 55 min |
 | Interpretability | Opaque predictor | Opaque | Traceable programs |
 | Rule discovery | No | No | Yes (3-5 examples) |
 | Primitive composition | No | No | Yes + cyclic compression |
 | Householder NEGATE | No | No | Yes (exact involution) |
+| EMA target | Yes | No | Yes |
 | Planning | MPC with learned model | N/A | Model-based search (13 actions) |
 
 ---
@@ -156,7 +160,7 @@ python npr_jepa_world_model.py
 
 | Platform | Part I | Part II | Part III |
 |----------|--------|---------|----------|
-| NVIDIA T4 (Kaggle/Colab) | ~30 min | ~40 min | ~40 min |
+| NVIDIA T4 (Kaggle/Colab) | ~30 min | ~40 min | ~55 min |
 | CPU | ~4 hours | ~5 hours | not recommended |
 
 ## Files
@@ -165,8 +169,8 @@ python npr_jepa_world_model.py
 |------|-------------|
 | `npr_scaled_fast.py` | **Part I** — Google Analogy + compositional tasks + probing |
 | `npr_world_model.py` | **Part II** — Text World Model (GPT-2 perceiver) |
-| `npr_jepa_world_model.py` | **Part III** — JEPA Visual World Model (ViT perceiver) + generalization tests |
-| `NPR_Paper.pdf` | Academic paper |
+| `npr_jepa_world_model.py` | **Part III** — JEPA Visual World Model (ViT + EMA perceiver) + generalization tests |
+| `NPR_Paper.pdf` | Academic paper (Part I + II + III) |
 | `README.md` | This file |
 
 ---
@@ -175,9 +179,12 @@ python npr_jepa_world_model.py
 
 - **Structurally traceable, not fully interpretable**: you can see which primitive is selected, but the 768-dim vector transformations are not semantically transparent
 - **Controlled environment**: discrete states, synthetic images, no real-world noise
-- **Renderer bias**: visual cues correlate with properties (steam = hot); counterfactual test measures this
+- **Renderer bias**: visual cues correlate with properties (steam = hot); counterfactual test (100%) confirms model doesn't rely on shortcuts
 - **Greedy planning**: 1-step lookahead model-based search, no beam search or MCTS
 - **2 slots**: may not scale to complex multi-property scenes
+- **Cross-property transfer fails (0%)**: limitation of ViT embedding space, not World Model
+- **GPT-2 baseline**: weak by 2026 standards; modern LLMs with CoT would likely outperform on linguistic tasks
+- **Small scale**: 127 observations, 50+ objects, 13 actions — scaling untested
 
 ---
 
@@ -190,7 +197,7 @@ python npr_jepa_world_model.py
          Cyclic Self-Improvement},
   author={Schino, Alessandro},
   year={2026},
-  url={https://zenodo.org/records/19862967}
+  url={https://zenodo.org/records/19913249}
 }
 ```
 

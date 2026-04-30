@@ -73,6 +73,43 @@ ALL_ACTIONS_LIST = sorted(set(a for r in TRANSITION_RULES.values() for _, a, _ i
 ACT2IDX = {a: i for i, a in enumerate(ALL_ACTIONS_LIST)}; IDX2ACT = {i: a for a, i in ACT2IDX.items()}; NUM_ACTIONS = len(ALL_ACTIONS_LIST)
 PROPERTY_TYPES = sorted(set(r["property_changed"] for r in TRANSITION_RULES.values())); PROP2IDX = {p: i for i, p in enumerate(PROPERTY_TYPES)}; NUM_PROPERTIES = len(PROPERTY_TYPES)
 
+# === HELD-OUT OBJECTS for generalization test ===
+# For each property type, hold out 2 objects from training
+HELD_OUT_OBJECTS = {
+    "temperature": ["iron", "metal"],
+    "openness": ["bottle", "cabinet"],
+    "power": ["oven", "speaker"],
+    "fullness": ["jug", "tank"],
+    "integrity": ["mirror", "lamp"],
+    "position": ["pen", "remote"],
+    "containment": ["tool", "book_c"],
+}
+HELD_OUT_SET = set()
+for objs in HELD_OUT_OBJECTS.values():
+    HELD_OUT_SET.update(objs)
+
+# Split TRANSITION_RULES into train and held-out test sets
+TRAIN_RULES = {}
+HELDOUT_RULES = {}
+for act_name, rule in TRANSITION_RULES.items():
+    train_triples = []
+    held_triples = []
+    for s, a, res in rule["triples"]:
+        obj = s.split()[1]  # "the OBJ is ..."
+        if obj in HELD_OUT_SET or f"{obj}_c" in HELD_OUT_SET:
+            held_triples.append((s, a, res))
+        else:
+            train_triples.append((s, a, res))
+    if train_triples:
+        TRAIN_RULES[act_name] = {"triples": train_triples, "precondition": rule["precondition"], "property_changed": rule["property_changed"]}
+    if held_triples:
+        HELDOUT_RULES[act_name] = {"triples": held_triples, "precondition": rule["precondition"], "property_changed": rule["property_changed"]}
+
+n_train = sum(len(r["triples"]) for r in TRAIN_RULES.values())
+n_held = sum(len(r["triples"]) for r in HELDOUT_RULES.values())
+print(f"Train/test split: {n_train} train triples, {n_held} held-out triples")
+print(f"Held-out objects: {sorted(HELD_OUT_SET)}")
+
 def build_vocab():
     ss = set()
     for r in TRANSITION_RULES.values():
@@ -286,6 +323,9 @@ def render_state_image(state_text, size=224):
         elif prop_val == "boiling": lc = (200, 50, 200)
         else: lc = (150, 180, 200)
         draw.rectangle([cx-lw//2, cy-lh//4, cx+lw//2, cy+lh], fill=lc)
+        # Object-specific label color band at bottom to distinguish liquids
+        label_c = ((h*47)%150+50, (h*83)%150+50, (h*127)%150+50)
+        draw.rectangle([cx-lw//2, cy+lh-6, cx+lw//2, cy+lh], fill=label_c)
 
     # OPENNESS objects
     elif prop_type == "openness" or obj_name in ["door","window","box","jar","gate","drawer","lid","bag","bottle","cabinet"]:
@@ -295,16 +335,18 @@ def render_state_image(state_text, size=224):
         else:
             # Box/container with lid
             w, h_ = obj_sz, int(obj_sz*0.8)
-            draw.rectangle([cx-w//2, cy-h_//4, cx+w//2, cy+h_//2], fill=(180,160,140), outline=(100,80,60), width=2)
+            # Object-specific body color
+            body_c = ((h*31)%100+120, (h*61)%80+100, (h*97)%60+80)
+            draw.rectangle([cx-w//2, cy-h_//4, cx+w//2, cy+h_//2], fill=body_c, outline=(100,80,60), width=2)
             if is_open:
-                # Lid tilted open
+                lid_c = (body_c[0]-20, body_c[1]-20, body_c[2]-20)
                 draw.polygon([(cx-w//2, cy-h_//4), (cx-w//2+10, cy-h_//4-20),
                               (cx+w//2+10, cy-h_//4-20), (cx+w//2, cy-h_//4)],
-                             fill=(160,140,120), outline=(100,80,60), width=2)
+                             fill=lid_c, outline=(100,80,60), width=2)
             else:
-                # Lid flat on top
+                lid_c = (body_c[0]-20, body_c[1]-20, body_c[2]-20)
                 draw.rectangle([cx-w//2-3, cy-h_//4-5, cx+w//2+3, cy-h_//4],
-                               fill=(160,140,120), outline=(100,80,60), width=2)
+                               fill=lid_c, outline=(100,80,60), width=2)
 
     # POWER objects
     elif prop_type == "power" or obj_name in ["lamp","light","screen","tv","radio","computer","fan","heater","oven","speaker"]:
@@ -317,44 +359,138 @@ def render_state_image(state_text, size=224):
         if prop_val == "full":
             lw = obj_sz - 10
             draw.rectangle([cx-lw//2, cy-obj_sz//4, cx+lw//2, cy+obj_sz//2], fill=(80,150,230))
-            # Water surface
             draw.line([(cx-lw//2, cy-obj_sz//4), (cx+lw//2, cy-obj_sz//4)], fill=(100,180,255), width=2)
 
-    # INTEGRITY objects
+    # INTEGRITY objects — each object has a unique shape
     elif prop_type == "integrity":
-        # Draw a vase/plate shape
         w = obj_sz
-        draw.ellipse([cx-w//2, cy-w//4, cx+w//2, cy+w//4], fill=(200,180,160), outline=(120,100,80), width=2)
+        # Object-specific shapes and colors
+        obj_color = ((h*41)%120+100, (h*73)%100+80, (h*109)%80+80)
+        outline_c = (obj_color[0]-50, obj_color[1]-50, obj_color[2]-50)
+
+        if obj_name in ["glass", "cup", "bowl"]:
+            # Curved container shape
+            _draw_container(draw, cx, cy, w, obj_name)
+        elif obj_name in ["plate"]:
+            # Wide flat ellipse
+            draw.ellipse([cx-w//2-10, cy-w//6, cx+w//2+10, cy+w//6], fill=obj_color, outline=outline_c, width=2)
+        elif obj_name in ["vase"]:
+            # Tall narrow with wide top
+            draw.polygon([(cx-w//4, cy+w//2), (cx-w//3, cy), (cx-w//5, cy-w//3),
+                          (cx+w//5, cy-w//3), (cx+w//3, cy), (cx+w//4, cy+w//2)],
+                         fill=obj_color, outline=outline_c, width=2)
+        elif obj_name in ["mirror"]:
+            # Rectangle with frame
+            draw.rectangle([cx-w//2+2, cy-w//3, cx+w//2-2, cy+w//3], fill=(180,210,230), outline=(120,100,60), width=3)
+            draw.rectangle([cx-w//2+8, cy-w//3+6, cx+w//2-8, cy+w//3-6], fill=(200,230,250), outline=(160,180,200))
+        elif obj_name in ["window"]:
+            # Window panes
+            draw.rectangle([cx-w//2, cy-w//3, cx+w//2, cy+w//3], fill=(180,200,220), outline=(100,80,60), width=2)
+            draw.line([(cx, cy-w//3), (cx, cy+w//3)], fill=(100,80,60), width=2)
+            draw.line([(cx-w//2, cy), (cx+w//2, cy)], fill=(100,80,60), width=2)
+        elif obj_name in ["bottle", "jar"]:
+            # Bottle neck + body
+            draw.rectangle([cx-w//6, cy-w//2, cx+w//6, cy-w//4], fill=obj_color, outline=outline_c, width=2)
+            draw.rectangle([cx-w//3, cy-w//4, cx+w//3, cy+w//3], fill=obj_color, outline=outline_c, width=2)
+        elif obj_name == "lamp":
+            # Lamp shade triangle + base
+            draw.polygon([(cx, cy-w//3), (cx-w//2, cy+w//6), (cx+w//2, cy+w//6)],
+                         fill=(255,240,200), outline=(180,160,100), width=2)
+            draw.rectangle([cx-w//8, cy+w//6, cx+w//8, cy+w//2], fill=(120,100,80))
+        else:
+            # Default: unique colored ellipse
+            draw.ellipse([cx-w//2, cy-w//4, cx+w//2, cy+w//4], fill=obj_color, outline=outline_c, width=2)
+
         if prop_val == "broken":
             _draw_broken_overlay(draw, cx, cy, obj_sz)
 
-    # POSITION objects
+    # POSITION objects — each object has distinct shape and color
     elif prop_type == "position":
-        # Draw rounded object
-        draw.ellipse([cx-obj_sz//3, cy-obj_sz//3, cx+obj_sz//3, cy+obj_sz//3],
-                     fill=(180,160,200), outline=(100,80,120), width=2)
+        obj_color = ((h*37)%150+80, (h*67)%150+80, (h*103)%150+80)
+        outline_c = (max(0,obj_color[0]-60), max(0,obj_color[1]-60), max(0,obj_color[2]-60))
+
+        if obj_name == "ball":
+            draw.ellipse([cx-obj_sz//3, cy-obj_sz//3, cx+obj_sz//3, cy+obj_sz//3],
+                         fill=(220,60,60), outline=(150,30,30), width=2)
+            # Stripe on ball
+            draw.arc([cx-obj_sz//3, cy-obj_sz//3, cx+obj_sz//3, cy+obj_sz//3], 60, 120, fill=(255,255,255), width=3)
+        elif obj_name == "book":
+            draw.rectangle([cx-obj_sz//2+5, cy-obj_sz//4, cx+obj_sz//2-5, cy+obj_sz//4],
+                           fill=(50,80,150), outline=(30,50,100), width=2)
+            # Spine lines
+            for i in range(3):
+                y = cy - obj_sz//4 + 8 + i*10
+                draw.line([(cx-obj_sz//2+10, y), (cx+obj_sz//2-10, y)], fill=(200,200,200), width=1)
+        elif obj_name == "phone":
+            draw.rectangle([cx-obj_sz//4, cy-obj_sz//3, cx+obj_sz//4, cy+obj_sz//3],
+                           fill=(40,40,50), outline=(20,20,30), width=2)
+            draw.rectangle([cx-obj_sz//4+4, cy-obj_sz//3+4, cx+obj_sz//4-4, cy+obj_sz//3-12],
+                           fill=(80,130,200))  # screen
+        elif obj_name == "toy":
+            # Star shape
+            pts = []
+            for i in range(10):
+                angle = math.radians(i * 36 - 90)
+                r = obj_sz//3 if i%2==0 else obj_sz//6
+                pts.append((cx + int(r*math.cos(angle)), cy + int(r*math.sin(angle))))
+            draw.polygon(pts, fill=(255,200,50), outline=(200,150,20), width=2)
+        elif obj_name == "pen":
+            # Long thin rectangle
+            draw.rectangle([cx-obj_sz//2, cy-4, cx+obj_sz//2, cy+4], fill=(30,30,120), outline=(10,10,80), width=1)
+            draw.polygon([(cx+obj_sz//2, cy-4), (cx+obj_sz//2+10, cy), (cx+obj_sz//2, cy+4)], fill=(200,180,100))
+        elif obj_name == "remote":
+            draw.rectangle([cx-obj_sz//5, cy-obj_sz//3, cx+obj_sz//5, cy+obj_sz//3],
+                           fill=(50,50,55), outline=(30,30,35), width=2)
+            # Buttons
+            for i in range(3):
+                for j in range(2):
+                    bx = cx - 6 + j*12
+                    by = cy - obj_sz//4 + 8 + i*12
+                    draw.ellipse([bx-3, by-3, bx+3, by+3], fill=(200,50,50))
+        elif obj_name in ["lamp", "cup", "glass", "plate", "vase"]:
+            # These might appear here if they have surface property — use unique shape
+            draw.ellipse([cx-obj_sz//3, cy-obj_sz//3, cx+obj_sz//3, cy+obj_sz//3],
+                         fill=obj_color, outline=outline_c, width=2)
+        else:
+            draw.ellipse([cx-obj_sz//3, cy-obj_sz//3, cx+obj_sz//3, cy+obj_sz//3],
+                         fill=obj_color, outline=outline_c, width=2)
+
         if prop_val == "surface":
             _draw_object_on_surface(draw, cx, cy-10, obj_sz, "table")
-        # floor: object is lower (already handled by cy adjustment)
 
-    # CONTAINMENT objects
+    # CONTAINMENT objects — distinct object + distinct container
     elif prop_type == "containment":
-        # Object + container
         container_w = obj_sz + 20
         container_h = obj_sz
+        # Object-specific color
+        obj_color = ((h*43)%150+80, (h*79)%150+80, (h*113)%150+80)
+        # Container-specific color based on container name
+        container_name = ""
+        if "outside" in state_text or "inside" in state_text:
+            parts_c = state_text.split()
+            container_name = parts_c[-1] if len(parts_c) > 3 else ""
+        cont_h = _hash(container_name) if container_name else h+100
+        cont_color = ((cont_h*31)%100+120, (cont_h*67)%80+100, (cont_h*97)%60+90)
+
+        # Object shape based on object name
+        obj_shape = h % 4
         if prop_val == "outside":
-            # Object to the left, container to the right
-            # Object
-            draw.ellipse([cx-50-15, cy-15, cx-50+15, cy+15], fill=(200,180,100), outline=(120,100,60), width=2)
-            # Container (box)
+            ox, oy = cx-50, cy
+            if obj_shape == 0: draw.ellipse([ox-15, oy-15, ox+15, oy+15], fill=obj_color, outline=(0,0,0), width=2)
+            elif obj_shape == 1: draw.rectangle([ox-12, oy-12, ox+12, oy+12], fill=obj_color, outline=(0,0,0), width=2)
+            elif obj_shape == 2: draw.polygon([(ox, oy-15), (ox+15, oy+10), (ox-15, oy+10)], fill=obj_color, outline=(0,0,0), width=2)
+            else: draw.polygon([(ox, oy-15), (ox+12, oy), (ox, oy+15), (ox-12, oy)], fill=obj_color, outline=(0,0,0), width=2)
+            # Container
             draw.rectangle([cx+10, cy-container_h//2, cx+10+container_w, cy+container_h//2],
-                           fill=(180,160,140), outline=(100,80,60), width=2)
+                           fill=cont_color, outline=(80,60,40), width=2)
         else:
-            # Object inside container
             draw.rectangle([cx-container_w//2, cy-container_h//2, cx+container_w//2, cy+container_h//2],
-                           fill=(180,160,140), outline=(100,80,60), width=2)
-            # Object visible inside
-            draw.ellipse([cx-12, cy-12, cx+12, cy+12], fill=(200,180,100), outline=(120,100,60), width=2)
+                           fill=cont_color, outline=(80,60,40), width=2)
+            # Object visible inside with its unique shape
+            if obj_shape == 0: draw.ellipse([cx-12, cy-12, cx+12, cy+12], fill=obj_color, outline=(0,0,0), width=2)
+            elif obj_shape == 1: draw.rectangle([cx-10, cy-10, cx+10, cy+10], fill=obj_color, outline=(0,0,0), width=2)
+            elif obj_shape == 2: draw.polygon([(cx, cy-12), (cx+12, cy+8), (cx-12, cy+8)], fill=obj_color, outline=(0,0,0), width=2)
+            else: draw.polygon([(cx, cy-12), (cx+10, cy), (cx, cy+12), (cx-10, cy)], fill=obj_color, outline=(0,0,0), width=2)
     else:
         # Fallback: simple colored circle
         color = (150+h%100, 100+h%80, 80+h%60)
@@ -381,11 +517,15 @@ def render_state_image(state_text, size=224):
     return img
 
 
-# === IMAGE EMBEDDING CACHE ===
+# === IMAGE EMBEDDING CACHE (with EMA target ViT support) ===
 class ImageEmbeddingCache:
-    def __init__(self, vit_model, vit_processor):
-        self.cache = {}; self.token_cache = {}; self.vit = vit_model; self.processor = vit_processor
-        self.device = next(vit_model.parameters()).device
+    def __init__(self, vit_online, vit_processor, vit_target=None):
+        self.cache = {}; self.token_cache = {}
+        self.vit = vit_online  # online encoder (receives gradients)
+        self.vit_target = vit_target  # EMA target encoder (no gradients)
+        self.processor = vit_processor
+        self.device = next(vit_online.parameters()).device
+        self.pixel_cache = {}
         print("\nPre-computing visual representations...")
         t0 = time.time()
         phrases = set()
@@ -394,7 +534,9 @@ class ImageEmbeddingCache:
         for ct in CHAIN_TRIPLES: phrases.add(ct["state"]); phrases.add(ct["result"]); phrases.add(ct["intermediate"])
         for act in ALL_ACTIONS_LIST: phrases.add(f"__action__{act}")
         print(f"  {len(phrases)} images to render and encode...")
-        self.vit.eval()
+        # Initial encoding uses target ViT (stable representations)
+        enc_vit = vit_target if vit_target is not None else vit_online
+        enc_vit.eval()
         with torch.no_grad():
             for p in sorted(phrases):
                 if p.startswith("__action__"):
@@ -402,10 +544,47 @@ class ImageEmbeddingCache:
                 else:
                     img = render_state_image(p)
                 inputs = self.processor(images=img, return_tensors="pt").to(self.device)
-                outputs = self.vit(**inputs)
+                self.pixel_cache[p] = inputs["pixel_values"].clone()
+                outputs = enc_vit(**inputs)
                 self.cache[p] = outputs.last_hidden_state[:, 0, :].squeeze(0).clone()
                 self.token_cache[p] = outputs.last_hidden_state[0, 1:, :].clone()
         print(f"  Done! {len(self.cache)} cached in {time.time()-t0:.1f}s")
+
+    def refresh(self):
+        """Re-encode all images through the TARGET ViT (stable, no collapse)."""
+        enc_vit = self.vit_target if self.vit_target is not None else self.vit
+        enc_vit.eval()
+        with torch.no_grad():
+            for p, pixels in self.pixel_cache.items():
+                outputs = enc_vit(pixel_values=pixels)
+                self.cache[p] = outputs.last_hidden_state[:, 0, :].squeeze(0).clone()
+                self.token_cache[p] = outputs.last_hidden_state[0, 1:, :].clone()
+
+    def encode_live(self, state_text):
+        """Encode through ONLINE ViT WITH gradients (for training)."""
+        if state_text in self.pixel_cache:
+            pixels = self.pixel_cache[state_text]
+        else:
+            img = render_state_image(state_text)
+            inputs = self.processor(images=img, return_tensors="pt").to(self.device)
+            pixels = inputs["pixel_values"]
+            self.pixel_cache[state_text] = pixels.clone()
+        outputs = self.vit(pixel_values=pixels)  # online ViT
+        return outputs.last_hidden_state[:, 0, :].squeeze(0), outputs.last_hidden_state[0, 1:, :]
+
+    def encode_target(self, state_text):
+        """Encode through TARGET ViT WITHOUT gradients (for target vectors)."""
+        if state_text in self.pixel_cache:
+            pixels = self.pixel_cache[state_text]
+        else:
+            img = render_state_image(state_text)
+            inputs = self.processor(images=img, return_tensors="pt").to(self.device)
+            pixels = inputs["pixel_values"]
+            self.pixel_cache[state_text] = pixels.clone()
+        enc_vit = self.vit_target if self.vit_target is not None else self.vit
+        with torch.no_grad():
+            outputs = enc_vit(pixel_values=pixels)
+        return outputs.last_hidden_state[:, 0, :].squeeze(0), outputs.last_hidden_state[0, 1:, :]
 
     def _render_action(self, act_name, size=224):
         """Render action as a distinctive arrow/icon image."""
@@ -700,8 +879,9 @@ class JEPAWorldModel(nn.Module):
 
 
 # === TASK GENERATION ===
-def generate_single_task(cache, s2i, num_examples=5, rule_name=None):
-    rule_name=rule_name or random.choice(list(TRANSITION_RULES.keys())); r=TRANSITION_RULES[rule_name]; ts=r["triples"]
+def generate_single_task(cache, s2i, num_examples=5, rule_name=None, rules_dict=None):
+    rules_dict = rules_dict or TRANSITION_RULES
+    rule_name=rule_name or random.choice(list(rules_dict.keys())); r=rules_dict[rule_name]; ts=r["triples"]
     ne=min(num_examples,len(ts)-1); chosen=random.sample(ts,ne+1); examples,test=chosen[:ne],chosen[ne]
     return {"example_reprs":torch.stack([torch.cat([cache.get(s),cache.get_action(a),cache.get(res)]) for s,a,res in examples]),
             "test_state":cache.get(test[0]),"test_action":cache.get_action(test[1]),"test_state_tokens":cache.get_tokens(test[0]),
@@ -743,7 +923,7 @@ def generate_mixed_task(cache, s2i, chains, ne=5):
     r=random.random()
     if r<CONFIG["chain_effect_ratio"] and CHAIN_TRIPLES: return generate_chain_effect_task(cache,s2i)
     if r<CONFIG["chain_effect_ratio"]+CONFIG["multistep_ratio"] and any(chains.get(d) for d in [2,3]): return generate_multistep_task(cache,s2i,chains,3)
-    return generate_single_task(cache,s2i,ne)
+    return generate_single_task(cache,s2i,ne,rules_dict=TRAIN_RULES)
 
 def generate_planning_task(cache, s2i, chains):
     avail=[d for d in [1,2,3] if chains.get(d)]
@@ -768,6 +948,45 @@ def goal_contrastive_loss(ge, rv, all_sv):
     if F.cosine_similarity(rv.unsqueeze(0),nv.unsqueeze(0)).item()>0.99: nv=random.choice(all_sv)
     neg=ge(rv,nv); return (F.binary_cross_entropy(pos,torch.ones_like(pos))+F.binary_cross_entropy(neg,torch.zeros_like(neg)))/2
 
+# Build object-to-states index for contrastive loss
+# Maps object name → list of all state texts for that object
+OBJ_TO_STATES = defaultdict(list)
+for r in TRANSITION_RULES.values():
+    for s, a, res in r["triples"]:
+        obj = s.split()[1]  # "the OBJ is ..."
+        OBJ_TO_STATES[obj].append(s)
+        res_obj = res.split()[1]
+        OBJ_TO_STATES[res_obj].append(res)
+# Deduplicate
+for obj in OBJ_TO_STATES:
+    OBJ_TO_STATES[obj] = list(set(OBJ_TO_STATES[obj]))
+
+def object_contrastive_loss(pred_vec, target_state, cache, all_states):
+    """Push pred_vec to be closer to same-object states than different-object states.
+    This preserves object identity in the predicted vector."""
+    obj_name = target_state.split()[1]  # "the OBJ is ..."
+    same_obj_states = OBJ_TO_STATES.get(obj_name, [])
+    if len(same_obj_states) < 1: return torch.tensor(0.0, device=DEVICE)
+
+    # Positive: random state of the SAME object
+    pos_state = random.choice(same_obj_states)
+    pos_vec = cache.get(pos_state)
+    pos_sim = F.cosine_similarity(pred_vec.unsqueeze(0), pos_vec.unsqueeze(0))
+
+    # Negative: state of a DIFFERENT object with same property value
+    # e.g., if target is "the mirror is broken", neg could be "the plate is broken"
+    target_prop = target_state.split()[-1]  # last word: "broken", "hot", etc.
+    diff_obj_states = [s for s in all_states if target_prop in s and s.split()[1] != obj_name]
+    if not diff_obj_states:
+        diff_obj_states = [s for s in all_states if s.split()[1] != obj_name]
+    neg_state = random.choice(diff_obj_states)
+    neg_vec = cache.get(neg_state)
+    neg_sim = F.cosine_similarity(pred_vec.unsqueeze(0), neg_vec.unsqueeze(0))
+
+    # Margin loss: pred should be closer to same-object than different-object
+    margin = 0.05
+    return F.relu(neg_sim - pos_sim + margin)
+
 
 # === TRAINING & EVAL ===
 def nearest_neighbor(pred_vec, all_states, cache):
@@ -777,12 +996,36 @@ def nearest_neighbor(pred_vec, all_states, cache):
         if sim>best_sim: best_sim,best_state=sim,st
     return best_state, best_sim
 
+def ema_update(online_model, target_model, decay=0.996):
+    """Exponential Moving Average update: target = decay * target + (1-decay) * online"""
+    with torch.no_grad():
+        for o_param, t_param in zip(online_model.parameters(), target_model.parameters()):
+            t_param.data.mul_(decay).add_(o_param.data, alpha=1-decay)
+
 def train_cycle(model, cache, s2i, i2s, chains, all_states, all_sv, n_iters, cycle, lr):
-    cfg=CONFIG; opt=torch.optim.AdamW([p for p in model.parameters() if p.requires_grad],lr=lr,weight_decay=0.01)
+    cfg=CONFIG
+    # Separate param groups: model at full LR, online ViT at 10x lower LR
+    vit_params = [p for p in cache.vit.parameters() if p.requires_grad]
+    model_params = [p for p in model.parameters() if p.requires_grad]
+    param_groups = [{"params": model_params, "lr": lr}, {"params": vit_params, "lr": lr * 0.1}]
+    opt=torch.optim.AdamW(param_groups, weight_decay=0.01)
     sch=torch.optim.lr_scheduler.LambdaLR(opt,lambda s:s/200 if s<200 else 0.5*(1+math.cos(math.pi*(s-200)/max(n_iters-200,1))))
-    model.train(); ok,tot=0,0; t0=time.time()
+    model.train(); cache.vit.train(); ok,tot=0,0; t0=time.time()
     for it in range(n_iters):
         task=generate_mixed_task(cache,s2i,chains); np_=model.lib.n
+
+        # ONLINE ViT encodes input state (with gradients)
+        test_state_text = task["state"]
+        live_vec, live_tokens = cache.encode_live(test_state_text)
+        task["test_state"] = live_vec
+        task["test_state_tokens"] = live_tokens
+
+        # TARGET ViT encodes target state (no gradients, prevents collapse)
+        target_text = task["expected"]
+        target_vec_ema, _ = cache.encode_target(target_text)
+        task["target_vec"] = target_vec_ema.detach()
+        task["result_state_vec"] = target_vec_ema.detach()
+
         pred_vec,prog,sig,_,stop_probs,_,_,_,obj_vec,precond_sc=model(task,cfg["temperature"],use_mem=False)
         target_vec=task["target_vec"].to(DEVICE)
         cosine_loss=1.0-F.cosine_similarity(pred_vec.unsqueeze(0),target_vec.unsqueeze(0))
@@ -801,12 +1044,22 @@ def train_cycle(model, cache, s2i, i2s, chains, all_states, all_sv, n_iters, cyc
         ok+=correct; tot+=1
         with torch.no_grad(): model.memorize(sig,prog,task["rule_name"],correct)
         if (it+1)%cfg["grad_accumulation"]==0:
-            nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad],1.0); opt.step(); opt.zero_grad(); sch.step()
+            nn.utils.clip_grad_norm_(model_params+vit_params,1.0); opt.step(); opt.zero_grad(); sch.step()
+            # EMA update: target ViT slowly follows online ViT
+            if cache.vit_target is not None:
+                ema_update(cache.vit, cache.vit_target, decay=0.996)
         if it%500==0:
             acc=100*ok/max(tot,1); speed=(it+1)/max(time.time()-t0,0.01)
             ms=f" [D{task['depth']}]" if task.get("task_type")=="multistep" else ""
             print(f"  [C{cycle}] {it:5d}/{n_iters} | cos:{cosine_loss.item():.3f} mse:{mse_loss.item():.3f} | Acc:{acc:4.0f}% | {speed:.0f}it/s | [{task['rule_name'][:12]:12s}] {'V' if correct else 'X'} K={len(prog)}{ms}")
             if it>0 and it%3000==0: ok,tot=0,0
+        # Refresh cache periodically using target ViT
+        if (it+1) % 2000 == 0:
+            cache.refresh()
+            all_sv[:] = [cache.get(s).to(DEVICE) for s in all_states]
+    # Final refresh after training cycle
+    cache.refresh()
+    all_sv[:] = [cache.get(s).to(DEVICE) for s in all_states]
 
 def evaluate(model, cache, s2i, i2s, chains, all_states):
     cfg=CONFIG; model.eval(); ne=cfg["eval_samples"]
@@ -868,17 +1121,230 @@ def evaluate(model, cache, s2i, i2s, chains, all_states):
     if real_t: print(f"    REAL: 1st:{100*real_1st/real_t:.0f}% full:{100*real_full/real_t:.0f}% ({real_t} tested)")
     return results
 
+
+def evaluate_generalization(model, cache, s2i, i2s, all_states):
+    """Test generalization to held-out objects, novel combinations, and counterfactual visuals."""
+    model.eval()
+
+    # =========================================================================
+    # TEST 1: HELD-OUT OBJECTS
+    # The model was trained WITHOUT these objects. It must apply learned rules
+    # to objects it has never seen during training.
+    # Examples from training objects are used, but the test object is held-out.
+    # =========================================================================
+    print(f"\n  {'='*55}")
+    print(f"  GENERALIZATION TEST 1: Held-Out Objects")
+    print(f"  (model never trained on these objects)")
+    print(f"  {'='*55}")
+
+    ho_ok, ho_total = 0, 0
+    ho_results = {}
+    with torch.no_grad():
+        for act_name in sorted(HELDOUT_RULES.keys()):
+            hr = HELDOUT_RULES[act_name]
+            tr = TRAIN_RULES.get(act_name)
+            if not tr or len(tr["triples"]) < 3: continue
+
+            rule_ok = 0
+            for s, a, res in hr["triples"]:
+                # Examples come from TRAINING objects only
+                train_examples = random.sample(tr["triples"], min(3, len(tr["triples"])))
+                ex_reprs = torch.stack([torch.cat([cache.get(es), cache.get_action(ea), cache.get(eres)])
+                                        for es, ea, eres in train_examples])
+                task = {
+                    "example_reprs": ex_reprs,
+                    "test_state": cache.get(s), "test_action": cache.get_action(a),
+                    "test_state_tokens": cache.get_tokens(s),
+                    "target_vec": cache.get(res), "result_state_vec": cache.get(res),
+                    "rule_name": act_name, "state": s, "action": a, "expected": res,
+                    "depth": 1, "task_type": "single", "action_idx": ACT2IDX[a],
+                    "precondition": hr["precondition"], "property_changed": hr["property_changed"],
+                    "precondition_holds": True, "property_idx": PROP2IDX[hr["property_changed"]],
+                }
+                pv, _, _, _, _, _, _, _, _, _ = model(task, 0.1, use_mem=False)
+                ps, sim = nearest_neighbor(pv, all_states, cache)
+                correct = ps == res
+                ho_ok += correct; ho_total += 1; rule_ok += correct
+
+                if ho_total <= 8:
+                    obj = s.split()[1]
+                    print(f"    [{act_name:12s}] {obj:8s}: '{s[:22]}' + '{a}' -> {'V' if correct else 'X'} (sim:{sim:.3f})")
+                    if not correct:
+                        print(f"      predicted: '{ps[:25]}' want: '{res[:25]}'")
+
+            n_held = len(hr["triples"])
+            pct = 100 * rule_ok / n_held if n_held > 0 else 0
+            ho_results[act_name] = pct
+
+    print(f"\n    Per-action held-out accuracy:")
+    for act, pct in sorted(ho_results.items(), key=lambda x: -x[1]):
+        print(f"      {act:12s}: {pct:5.1f}%")
+    if ho_total:
+        print(f"\n    HELD-OUT OBJECTS: {100*ho_ok/ho_total:.1f}% ({ho_ok}/{ho_total})")
+
+    # =========================================================================
+    # TEST 2: COUNTERFACTUAL RENDERING
+    # Render images with swapped visual cues and test if model still works.
+    # E.g., "hot" rendered with cold visuals (blue, ice) to check if model
+    # relies on visual shortcuts or learned the rule structure.
+    # =========================================================================
+    print(f"\n  {'='*55}")
+    print(f"  GENERALIZATION TEST 2: Counterfactual Visuals")
+    print(f"  (correct state but WRONG visual cues)")
+    print(f"  {'='*55}")
+
+    # Create counterfactual images: state says "hot" but render with "cold" visuals
+    counterfactual_pairs = [
+        ("the water is hot", "cold", "cool", "the water is cold"),  # hot rendered as cold visual
+        ("the coffee is cold", "hot", "heat", "the coffee is hot"),  # cold rendered as hot visual
+        ("the door is open", "closed", "close", "the door is closed"),  # open rendered as closed
+        ("the box is closed", "open", "open", "the box is open"),  # closed rendered as open
+        ("the lamp is on", "off", "switch off", "the lamp is off"),  # on rendered as off
+        ("the fan is off", "on", "switch on", "the fan is on"),  # off rendered as on
+    ]
+
+    cf_ok, cf_total = 0, 0
+    with torch.no_grad():
+        for true_state, fake_visual, action, expected in counterfactual_pairs:
+            # Render the image with WRONG visual cue
+            parts = true_state.split()
+            obj_name = parts[1]
+            # Create fake state text for rendering only
+            fake_state = true_state.replace(f"is {parts[-1]}", f"is {fake_visual}")
+
+            # Encode the counterfactual image
+            cf_img = render_state_image(fake_state)
+            inputs = cache.processor(images=cf_img, return_tensors="pt").to(cache.device)
+            with torch.no_grad():
+                outputs = cache.vit(**inputs)
+                cf_vec = outputs.last_hidden_state[:, 0, :].squeeze(0)
+                cf_tokens = outputs.last_hidden_state[0, 1:, :]
+
+            # Use training examples for this rule
+            rule = TRAIN_RULES.get(action)
+            if not rule: continue
+            train_ex = random.sample(rule["triples"], min(3, len(rule["triples"])))
+            ex_reprs = torch.stack([torch.cat([cache.get(s), cache.get_action(a), cache.get(r)])
+                                    for s, a, r in train_ex])
+
+            task = {
+                "example_reprs": ex_reprs,
+                "test_state": cf_vec, "test_action": cache.get_action(action),
+                "test_state_tokens": cf_tokens,
+                "target_vec": cache.get(expected), "result_state_vec": cache.get(expected),
+                "rule_name": action, "state": f"{true_state} [CF:{fake_visual}]",
+                "action": action, "expected": expected,
+                "depth": 1, "task_type": "single", "action_idx": ACT2IDX[action],
+                "precondition": rule["precondition"], "property_changed": rule["property_changed"],
+                "precondition_holds": True, "property_idx": PROP2IDX[rule["property_changed"]],
+            }
+            pv, _, _, _, _, _, _, _, _, _ = model(task, 0.1, use_mem=False)
+            ps, sim = nearest_neighbor(pv, all_states, cache)
+
+            # For counterfactual: check if model predicts based on action (correct)
+            # or based on visual shortcut (wrong)
+            correct = ps == expected
+            cf_ok += correct; cf_total += 1
+
+            print(f"    '{true_state[:20]}' [visual={fake_visual:6s}] + '{action:10s}' -> "
+                  f"'{ps[:22]}' {'V' if correct else 'X'} (sim:{sim:.3f})")
+            if not correct:
+                print(f"      want: '{expected[:25]}'")
+
+    if cf_total:
+        print(f"\n    COUNTERFACTUAL: {100*cf_ok/cf_total:.1f}% ({cf_ok}/{cf_total})")
+        if cf_ok / cf_total > 0.5:
+            print(f"    -> Model relies on rule structure, not just visual shortcuts")
+        else:
+            print(f"    -> Model may rely on visual shortcuts (renderer bias)")
+
+    # =========================================================================
+    # TEST 3: CROSS-PROPERTY (novel object-action combinations)
+    # Apply actions to objects that don't normally have that property.
+    # E.g., "the door is cold + heat" — door is openness, not temperature.
+    # The model has never seen "the door is cold" in training.
+    # We test if the learned rule generalizes beyond the original object set.
+    # =========================================================================
+    print(f"\n  {'='*55}")
+    print(f"  GENERALIZATION TEST 3: Cross-Property Transfer")
+    print(f"  (apply actions to objects from different property types)")
+    print(f"  {'='*55}")
+
+    cross_tests = [
+        # (novel_state, action, expected_result, description)
+        ("the door is cold", "heat", "the door is hot", "openness obj + temperature action"),
+        ("the lamp is cold", "heat", "the lamp is hot", "power obj + temperature action"),
+        ("the water is closed", "open", "the water is open", "temperature obj + openness action"),
+        ("the ball is empty", "fill", "the ball is full", "position obj + fullness action"),
+        ("the key is intact", "drop", "the key is broken", "containment obj + integrity action"),
+        ("the cup is off", "switch on", "the cup is on", "fullness obj + power action"),
+    ]
+
+    cp_ok, cp_total = 0, 0
+    with torch.no_grad():
+        for novel_state, action, expected, desc in cross_tests:
+            # Encode the novel image (renderer will handle it generically)
+            rule = TRAIN_RULES.get(action)
+            if not rule: continue
+
+            train_ex = random.sample(rule["triples"], min(3, len(rule["triples"])))
+            ex_reprs = torch.stack([torch.cat([cache.get(s), cache.get_action(a), cache.get(r)])
+                                    for s, a, r in train_ex])
+
+            task = {
+                "example_reprs": ex_reprs,
+                "test_state": cache.get(novel_state), "test_action": cache.get_action(action),
+                "test_state_tokens": cache.get_tokens(novel_state),
+                "target_vec": cache.get(expected), "result_state_vec": cache.get(expected),
+                "rule_name": action, "state": novel_state, "action": action, "expected": expected,
+                "depth": 1, "task_type": "single", "action_idx": ACT2IDX[action],
+                "precondition": rule["precondition"], "property_changed": rule["property_changed"],
+                "precondition_holds": True, "property_idx": PROP2IDX[rule["property_changed"]],
+            }
+            pv, _, _, _, _, _, _, _, _, _ = model(task, 0.1, use_mem=False)
+            ps, sim = nearest_neighbor(pv, all_states, cache)
+            correct = ps == expected
+            cp_ok += correct; cp_total += 1
+
+            print(f"    [{desc[:30]:30s}] '{novel_state[:18]}' + '{action:10s}' -> {'V' if correct else 'X'} (sim:{sim:.3f})")
+            if not correct:
+                print(f"      got: '{ps[:25]}' want: '{expected[:25]}'")
+
+    if cp_total:
+        print(f"\n    CROSS-PROPERTY: {100*cp_ok/cp_total:.1f}% ({cp_ok}/{cp_total})")
+
+    print(f"\n  {'='*55}")
+    print(f"  GENERALIZATION SUMMARY")
+    print(f"  {'='*55}")
+    if ho_total: print(f"    Held-out objects:     {100*ho_ok/ho_total:5.1f}% ({ho_ok}/{ho_total})")
+    if cf_total: print(f"    Counterfactual:       {100*cf_ok/cf_total:5.1f}% ({cf_ok}/{cf_total})")
+    if cp_total: print(f"    Cross-property:       {100*cp_ok/cp_total:5.1f}% ({cp_ok}/{cp_total})")
+
 def main():
     from transformers import ViTModel, ViTImageProcessor
     print(f"Device: {DEVICE}")
     print("Loading ViT (google/vit-base-patch16-224)...")
     vit_processor = ViTImageProcessor.from_pretrained("google/vit-base-patch16-224")
-    vit_model = ViTModel.from_pretrained("google/vit-base-patch16-224").to(DEVICE).eval()
+    vit_model = ViTModel.from_pretrained("google/vit-base-patch16-224").to(DEVICE)
+    # Freeze all ViT layers first
     for p in vit_model.parameters(): p.requires_grad = False
+    # Unfreeze last 2 encoder layers + layernorm for domain adaptation
+    for name, p in vit_model.named_parameters():
+        if "encoder.layer.10" in name or "encoder.layer.11" in name or "layernorm" in name:
+            p.requires_grad = True
+    vit_trainable = sum(p.numel() for p in vit_model.parameters() if p.requires_grad)
+    print(f"ViT online: {vit_trainable:,} trainable params (last 2 layers + layernorm)")
+
+    # Create EMA target ViT (copy of online, fully frozen, updated via EMA)
+    import copy
+    vit_target = copy.deepcopy(vit_model).to(DEVICE)
+    for p in vit_target.parameters(): p.requires_grad = False
+    print(f"ViT target: EMA copy (decay=0.996, no gradients)")
+
     sl, s2i, i2s = build_vocab()
     print(f"\nRules:{len(TRANSITION_RULES)} | States:{len(sl)} | Actions:{NUM_ACTIONS}")
     chains = find_chains(CONFIG["max_chain_length"])
-    cache = ImageEmbeddingCache(vit_model, vit_processor)
+    cache = ImageEmbeddingCache(vit_model, vit_processor, vit_target=vit_target)
     all_sv = [cache.get(s).to(DEVICE) for s in sl]; all_states = sl
     model = JEPAWorldModel(CONFIG["vit_dim"])
     tp = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -895,6 +1361,8 @@ def main():
             if n: print(f"  {n} new primitives.")
     print(f"\n{'='*65}\nFINAL TEST\n{'='*65}\nLibrary: {model.lib.names}")
     evaluate(model, cache, s2i, i2s, chains, all_states)
+    print(f"\n{'='*65}\nGENERALIZATION TESTS\n{'='*65}")
+    evaluate_generalization(model, cache, s2i, i2s, all_states)
     print(f"\n  Memory: {model.mem.stats()}\nDone.")
 
 if __name__ == "__main__":
