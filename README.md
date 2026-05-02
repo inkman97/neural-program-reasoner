@@ -236,7 +236,7 @@ python npr_jepa_world_model_visual.py
          Cyclic Self-Improvement},
   author={Schino, Alessandro},
   year={2026},
-  url={https://zenodo.org/records/19913249}
+  url={https://zenodo.org/records/19974993}
 }
 ```
 
