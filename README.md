@@ -12,17 +12,19 @@
 
 NPR is an architecture that **discovers rule programs** from a few examples using composable neural primitives. Instead of encoding knowledge implicitly in billions of parameters, NPR builds explicit programs you can **trace**, **modify**, and **reuse**.
 
-The project spans three parts, from linguistic analogy to a visual world model:
+The project spans three parts, from linguistic analogy to a visual world model, with temporal extensions:
 
 ```
-Part I:   Text → GPT-2 → discovers linguistic rules      → 98.8% compositional
-Part II:  Text → GPT-2 → discovers physical rules         → 100% single-step, 95% depth-3
-Part III: Image → ViT  → discovers physical rules (JEPA)  → 93.8% single-step, 67.7% held-out generalization
+Part I:    Text  → GPT-2 → discovers linguistic rules      → 98.8% compositional
+Part II:   Text  → GPT-2 → discovers physical rules         → 100% single-step, 95% depth-3
+Part III:  Image → ViT   → discovers physical rules (JEPA)  → 93.8% single-step, 67.7% held-out
+Part II: Text  → GPT-2 → temporal reasoning (wait=100%)   → 96.9% overall, 100% temporal
+Part III:Image → ViT   → temporal reasoning (wait=100%)   → 93.5% overall, 100% wait accuracy
 ```
 
 ---
 
-## Three Parts
+## Three Parts + Temporal Extensions
 
 ### Part I: Linguistic Analogy (Google Analogy Dataset)
 NPR discovers rules for word relationships and composes them for multi-relation reasoning. **98.8% on compositional tasks.**
@@ -31,7 +33,15 @@ NPR discovers rules for word relationships and composes them for multi-relation 
 NPR implements LeCun's three-module architecture (Perceiver, World Model, Reasoner) with GPT-2 as perceiver. Discovers physical rules from text, simulates state transitions, plans actions. **100% single-step accuracy on 13 actions.**
 
 ### Part III: JEPA Visual World Model
-Replaces GPT-2 with ViT + EMA target network. Learns from synthetic scene images. Predicts entirely in latent space — no vocabulary, no decoder. Model-based planning via World Model simulation. Includes three generalization tests: held-out objects, counterfactual visuals, and cross-property transfer. **93.8% single-step, 100% counterfactual.**
+Replaces GPT-2 with ViT + EMA target network. Learns from synthetic scene images. Predicts entirely in latent space — no vocabulary, no decoder. Model-based beam search planning via World Model simulation. Includes three generalization tests: held-out objects, counterfactual visuals, and cross-property transfer. **93.8% single-step, 100% counterfactual.**
+
+### Temporal Extensions (Part II & Part III)
+Adds three types of temporal effects to both text and visual world models:
+- **Delayed effects**: "put in oven" → cooking_1 → wait → cooking_2 → wait → cooked
+- **Natural decay**: full battery → wait → half → wait → empty
+- **Action duration**: "charge" → charging_1 → wait → charging_2 → wait → full
+
+The "wait" action has **11 context-dependent transitions** — the same action produces different results depending on the current state. The World Model architecture is **identical** to the original — no temporal modules, no timers. Temporal progress is encoded in the state itself. **100% wait accuracy on both text and visual.**
 
 ---
 
@@ -66,10 +76,23 @@ OVERALL:                98.8%    (top3: 100%)
 | Latent similarity (avg cosine) | **0.974** |
 | Depth-2 compositional chains | **94%** |
 | Depth-3 compositional chains | **94%** |
-| Planning first action (real) | **61%** |
+| Planning first action (real, beam search) | **61%** |
 | **Held-out objects** | **67.7% (21/31)** |
 | **Counterfactual visuals** | **100% (6/6)** |
 | **Cross-property transfer** | **0% (0/6)** |
+
+### Temporal Extensions
+
+| Metric | Part II-T (text) | Part III-T (visual) |
+|--------|-----------------|-------------------|
+| Overall accuracy | **96.9%** | **93.5%** |
+| Original actions | **95.8%** | **93.7%** |
+| Temporal actions | **100%** | **93.0%** |
+| Wait context-dependency | **100% (20/20)** | **100% (20/20)** |
+| Temporal chains — decay | **100%** | **100%** |
+| Temporal chains — duration | **100%** | **100%** |
+| Temporal chains — delayed | **100%** | **67%** |
+| Temporal chains — duration+decay | **100%** | **100%** |
 
 ---
 
@@ -100,20 +123,36 @@ OVERALL:                98.8%    (top3: 100%)
 ┌───────────────────────────────────────────────────────┐
 │  REASONER                                              │
 │  GoalEvaluator → are we at the goal?                   │
-│  Model-based planning → simulate all 13 actions,       │
-│     pick the one closest to goal, repeat               │
+│  Model-based beam search planning (width=3) →          │
+│     simulate all actions through World Model,          │
+│     maintain top-k paths, pick best                    │
 │  No ActionScorer — World Model IS the planner          │
 └───────────────────────────────────────────────────────┘
+```
+
+### Temporal Architecture (identical World Model)
+
+```
+Temporal progress encoded IN THE STATE:
+  "the bread is raw" → put in oven → "the bread is cooking_1"
+  "the bread is cooking_1" → wait → "the bread is cooking_2"
+  "the bread is cooking_2" → wait → "the bread is cooked"
+  "the bread is cooked" → wait → "the bread is burnt"
+
+"wait" = 1 action, 11 different effects depending on current state.
+No timers, no temporal modules. Same primitives, same FiLM, same architecture.
+The RuleSynthesizer learns context-dependent rules from examples.
 ```
 
 ### Key Innovations
 
 - **Householder NEGATE**: `H(x) = x - 2(v·x)/(v·v)·v` — structurally involutive by construction (H(H(x)) = x exactly)
 - **EMA target network**: online ViT adapts to domain, target ViT provides stable prediction targets — prevents representation collapse (follows BYOL/V-JEPA)
-- **Model-based planning**: simulates all actions through the real World Model, picks best — no separate action predictor
+- **Model-based beam search planning**: simulate all actions through the real World Model, maintain top-k paths (width=3), pick best
 - **Predicts in latent space**: no vocabulary, no decoder — true JEPA-style prediction
 - **Cyclic Self-Improvement**: frequent primitive pairs compressed into new operations
 - **Structurally traceable**: every decision (object extraction, slot selection, program, FiLM parameters) is inspectable
+- **Context-dependent temporal reasoning**: "wait" learns 11 different transitions from examples alone, no temporal module needed
 
 ### Generalization Tests (Part III)
 
@@ -134,9 +173,10 @@ Three tests address common criticisms of toy-world models:
 | Interpretability | Opaque predictor | Opaque | Traceable programs |
 | Rule discovery | No | No | Yes (3-5 examples) |
 | Primitive composition | No | No | Yes + cyclic compression |
+| Temporal reasoning | Implicit | No | Explicit (11 wait transitions) |
 | Householder NEGATE | No | No | Yes (exact involution) |
 | EMA target | Yes | No | Yes |
-| Planning | MPC with learned model | N/A | Model-based search (13 actions) |
+| Planning | MPC with learned model | N/A | Beam search (width=3) |
 
 ---
 
@@ -157,20 +197,20 @@ python npr_jepa_world_model_visual.py
 
 ### Expected Runtime
 
-| Platform | Part I | Part II | Part III |
-|----------|--------|---------|----------|
-| NVIDIA T4 (Kaggle/Colab) | ~30 min | ~40 min | ~55 min |
-| CPU | ~4 hours | ~5 hours | not recommended |
+| Platform | Part I | Part II | Part III | Part II-T | Part III-T |
+|----------|--------|---------|----------|-----------|------------|
+| NVIDIA T4 (Colab) | ~30 min | ~40 min | ~55 min | ~50 min | ~90 min |
+| CPU | ~4 hours | ~5 hours | not rec. | ~6 hours | not rec. |
 
 ## Files
 
-| File                             | Description |
-|----------------------------------|-------------|
-| `npr_linguistic_model.py`        | **Part I** — Google Analogy + compositional tasks + probing |
-| `npr_jepa_world_model_text.py`   | **Part II** — Text World Model (GPT-2 perceiver) |
-| `npr_jepa_world_model_visual.py` | **Part III** — JEPA Visual World Model (ViT + EMA perceiver) + generalization tests |
-| `NPR_Paper.pdf`                  | Academic paper (Part I + II + III) |
-| `README.md`                      | This file |
+| File | Description                                                                                    |
+|------|------------------------------------------------------------------------------------------------|
+| `npr_linguistic_reasoner.py` | **Part I** — Google Analogy + compositional tasks + probing                                    |
+| `npr_jepa_world_model_text.py` | **Part II** — Text World Model (GPT-2 perceiver) + temporal reasoning                          |
+| `npr_jepa_world_model_visual.py` | **Part III** — JEPA Visual World Model (ViT + EMA) + generalization tests + temporal reasoning |
+| `NPR_Paper.pdf` | Academic paper (Part I + II + III)                                                             |
+| `README.md` | This file                                                                                      |
 
 ---
 
@@ -179,11 +219,11 @@ python npr_jepa_world_model_visual.py
 - **Structurally traceable, not fully interpretable**: you can see which primitive is selected, but the 768-dim vector transformations are not semantically transparent
 - **Controlled environment**: discrete states, synthetic images, no real-world noise
 - **Renderer bias**: visual cues correlate with properties (steam = hot); counterfactual test (100%) confirms model doesn't rely on shortcuts
-- **Greedy planning**: 1-step lookahead model-based search, no beam search or MCTS
 - **2 slots**: may not scale to complex multi-property scenes
 - **Cross-property transfer fails (0%)**: limitation of ViT embedding space, not World Model
 - **GPT-2 baseline**: weak by 2026 standards; modern LLMs with CoT would likely outperform on linguistic tasks
-- **Small scale**: 127 observations, 50+ objects, 13 actions — scaling untested
+- **Small scale**: 127 observations (172 with temporal), 62 objects, 18 actions — scaling untested
+- **Temporal delayed chains at 67% on visual**: cooking_1 and cooking_2 are visually similar in the synthetic renderer
 
 ---
 
