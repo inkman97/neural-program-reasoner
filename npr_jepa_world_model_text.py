@@ -728,7 +728,8 @@ class RuleSynthesizer(nn.Module):
 
 class Memory:
     def __init__(self, cap=300):
-        self.cap = cap; self.entries = []
+        self.cap = cap;
+        self.entries = []
 
     def store(self, sig, prog, rel, ok):
         self.entries.append({"sig": sig.detach().clone(), "prog": prog, "rel": rel, "ok": ok, "cnt": 1})
@@ -969,7 +970,7 @@ def train_cycle(model, cache, s2i, i2s, chains, tokenizer, all_sv, n_iters, cycl
     cfg = CONFIG
     opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=lr, weight_decay=0.01)
     sch = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: s / 200 if s < 200 else 0.5 * (
-                1 + math.cos(math.pi * (s - 200) / max(n_iters - 200, 1))))
+            1 + math.cos(math.pi * (s - 200) / max(n_iters - 200, 1))))
     model.train();
     ok, tot, pl_ok, pl_tot = 0, 0, 0, 0;
     t0 = time.time()
@@ -1145,10 +1146,12 @@ def evaluate(model, cache, s2i, i2s, chains, tokenizer):
         plan, sc = model.plan(cache, task["initial_state"], task["goal_state"], max_depth=task["depth"])
         is_rt = task["initial_state"] == task["goal_state"]
         if plan:
-            fc = plan[0] == task["correct_actions"][0]; full_c = plan[:len(task["correct_actions"])] == task[
+            fc = plan[0] == task["correct_actions"][0];
+            full_c = plan[:len(task["correct_actions"])] == task[
                 "correct_actions"]
         else:
-            fc = is_rt; full_c = is_rt
+            fc = is_rt;
+            full_c = is_rt
         pl_1st += fc;
         pl_full += full_c;
         pl_t += 1
