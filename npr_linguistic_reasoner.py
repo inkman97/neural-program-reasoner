@@ -322,7 +322,7 @@ def probe_primitives(model, cache, relations, w2i):
         if "capital-world" in relations:
             ok = sum(1 for a, b in relations["capital-world"][:20] if
                      (lib.apply(4, cache.get(f" {a} means")) - cache.get(f" {b} means")).norm() < (
-                                 cache.get(f" {a} means") - cache.get(f" {b} means")).norm())
+                             cache.get(f" {a} means") - cache.get(f" {b} means")).norm())
             print(f"  5. LOOKUP directional: {ok}/20")
         np_ = min(lib.n, len(BASE_NAMES))
         ad = [torch.stack([lib.apply(i, v) - v for v in vecs[:30]]).mean(0) for i in range(np_)]
@@ -565,7 +565,7 @@ def train_cycle(model, cache, w2i, i2w, rels, comp_tasks, n_iters, cycle, lr):
     cfg = CONFIG
     opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=lr, weight_decay=0.01)
     sch = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: s / 300 if s < 300 else 0.5 * (
-                1 + math.cos(math.pi * (s - 300) / max(n_iters - 300, 1))))
+            1 + math.cos(math.pi * (s - 300) / max(n_iters - 300, 1))))
     model.train();
     ok, tot, cok, ctot = 0, 0, 0, 0;
     t0 = time.time()

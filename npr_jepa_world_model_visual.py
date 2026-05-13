@@ -413,17 +413,23 @@ def _draw_battery(draw, cx, cy, sz, level):
     bar_y = cy + h // 2 - 12
     draw.rectangle([cx - bar_w // 2, bar_y, cx + bar_w // 2, bar_y + bar_h], fill=(60, 60, 60), outline=(100, 100, 100))
     if level == "empty":
-        fill_pct = 0.0; bar_color = (200, 50, 50)
+        fill_pct = 0.0;
+        bar_color = (200, 50, 50)
     elif level == "charging_1":
-        fill_pct = 0.33; bar_color = (255, 200, 50)
+        fill_pct = 0.33;
+        bar_color = (255, 200, 50)
     elif level == "charging_2":
-        fill_pct = 0.66; bar_color = (200, 220, 50)
+        fill_pct = 0.66;
+        bar_color = (200, 220, 50)
     elif level == "half":
-        fill_pct = 0.5; bar_color = (255, 180, 50)
+        fill_pct = 0.5;
+        bar_color = (255, 180, 50)
     elif level == "full":
-        fill_pct = 1.0; bar_color = (50, 200, 50)
+        fill_pct = 1.0;
+        bar_color = (50, 200, 50)
     else:
-        fill_pct = 0.0; bar_color = (100, 100, 100)
+        fill_pct = 0.0;
+        bar_color = (100, 100, 100)
     if fill_pct > 0:
         fill_w = int(bar_w * fill_pct)
         draw.rectangle([cx - bar_w // 2, bar_y, cx - bar_w // 2 + fill_w, bar_y + bar_h], fill=bar_color)
@@ -439,17 +445,23 @@ def _draw_food(draw, cx, cy, sz, cook_state):
     """Draw food item with cooking state visual."""
     w = int(sz * 0.8)
     if cook_state == "raw":
-        color = (240, 210, 180); outline = (200, 170, 130)
+        color = (240, 210, 180);
+        outline = (200, 170, 130)
     elif cook_state == "cooking_1":
-        color = (240, 190, 140); outline = (200, 150, 100)
+        color = (240, 190, 140);
+        outline = (200, 150, 100)
     elif cook_state == "cooking_2":
-        color = (220, 160, 100); outline = (180, 120, 70)
+        color = (220, 160, 100);
+        outline = (180, 120, 70)
     elif cook_state == "cooked":
-        color = (180, 130, 80); outline = (140, 100, 60)
+        color = (180, 130, 80);
+        outline = (140, 100, 60)
     elif cook_state == "burnt":
-        color = (60, 40, 30); outline = (30, 20, 15)
+        color = (60, 40, 30);
+        outline = (30, 20, 15)
     else:
-        color = (200, 200, 200); outline = (150, 150, 150)
+        color = (200, 200, 200);
+        outline = (150, 150, 150)
     # Food shape (rounded rectangle)
     draw.rounded_rectangle([cx - w // 2, cy - w // 3, cx + w // 2, cy + w // 3], radius=8, fill=color, outline=outline,
                            width=2)
@@ -527,13 +539,17 @@ def render_state_image(state_text, size=224):
     prop_val = "";
     prop_type = ""
     if "on the floor" in state_text:
-        prop_val = "floor"; prop_type = "position"
+        prop_val = "floor";
+        prop_type = "position"
     elif "on the" in state_text:
-        prop_val = "surface"; prop_type = "position"
+        prop_val = "surface";
+        prop_type = "position"
     elif "outside" in state_text:
-        prop_val = "outside"; prop_type = "containment"
+        prop_val = "outside";
+        prop_type = "containment"
     elif "inside" in state_text:
-        prop_val = "inside"; prop_type = "containment"
+        prop_val = "inside";
+        prop_type = "containment"
     else:
         for ptype, vals in BG_COLORS.items():
             for val in vals:
@@ -944,7 +960,7 @@ class PropertyUpdater(nn.Module):
         film = self.action_film(action);
         scale, shift = film[:self.sd], film[self.sd:]
         for i, sel in enumerate(prog): pv = pv + self.step_emb(torch.tensor(i, device=pv.device)); pv = pv * (
-                    1 + 0.1 * torch.tanh(scale)) + 0.1 * torch.tanh(shift); pv = lib.apply_soft(sel, pv)
+                1 + 0.1 * torch.tanh(scale)) + 0.1 * torch.tanh(shift); pv = lib.apply_soft(sel, pv)
         return pv
 
 
@@ -1019,10 +1035,12 @@ class RuleSynthesizer(nn.Module):
 
 class Memory:
     def __init__(self, cap=300):
-        self.cap = cap; self.entries = []
+        self.cap = cap;
+        self.entries = []
 
     def store(self, sig, prog, rel, ok):
-        self.entries.append({"sig": sig.detach().clone(), "prog": prog, "rel": rel, "ok": ok, "cnt": 1}); (
+        self.entries.append({"sig": sig.detach().clone(), "prog": prog, "rel": rel, "ok": ok, "cnt": 1});
+        (
             self.entries.sort(key=lambda e: e["cnt"], reverse=True),
             setattr(self, 'entries', self.entries[:self.cap])) if len(self.entries) > self.cap else None
 
@@ -1168,10 +1186,13 @@ class JEPAWorldModel(nn.Module):
                     if self.goal_eval(cur, gv).item() > 0.85: completed.append((sim, actions, cur))
                 if completed: break
             if completed:
-                completed.sort(key=lambda x: -x[0]); best = completed[0]; return best[1], self.goal_eval(best[2],
-                                                                                                         gv).item()
+                completed.sort(key=lambda x: -x[0]);
+                best = completed[0];
+                return best[1], self.goal_eval(best[2],
+                                               gv).item()
             else:
-                best = beams[0]; return best[1], self.goal_eval(best[2], gv).item()
+                best = beams[0];
+                return best[1], self.goal_eval(best[2], gv).item()
 
     def memorize(self, sig, prog, rel, ok):
         self.mem.store(sig, [s.argmax().item() for s in prog], rel, ok)
@@ -1203,14 +1224,14 @@ def generate_single_task(cache, s2i, num_examples=5, rule_name=None, rules_dict=
     examples, test = chosen[:ne], chosen[ne]
     return {"example_reprs": torch.stack(
         [torch.cat([cache.get(s), cache.get_action(a), cache.get(res)]) for s, a, res in examples]),
-            "test_state": cache.get(test[0]), "test_action": cache.get_action(test[1]),
-            "test_state_tokens": cache.get_tokens(test[0]),
-            "target_vec": cache.get(test[2]), "rule_name": rule_name, "state": test[0], "action": test[1],
-            "expected": test[2],
-            "depth": 1, "task_type": "single", "result_state_vec": cache.get(test[2]), "action_idx": ACT2IDX[test[1]],
-            "precondition": r["precondition"], "property_changed": r["property_changed"],
-            "precondition_holds": r["precondition"] in test[0] or r["precondition"] == "any",
-            "property_idx": PROP2IDX.get(r["property_changed"], 0)}
+        "test_state": cache.get(test[0]), "test_action": cache.get_action(test[1]),
+        "test_state_tokens": cache.get_tokens(test[0]),
+        "target_vec": cache.get(test[2]), "rule_name": rule_name, "state": test[0], "action": test[1],
+        "expected": test[2],
+        "depth": 1, "task_type": "single", "result_state_vec": cache.get(test[2]), "action_idx": ACT2IDX[test[1]],
+        "precondition": r["precondition"], "property_changed": r["property_changed"],
+        "precondition_holds": r["precondition"] in test[0] or r["precondition"] == "any",
+        "property_idx": PROP2IDX.get(r["property_changed"], 0)}
 
 
 def generate_multistep_task(cache, s2i, chains, num_examples=3):
@@ -1289,7 +1310,7 @@ def generate_mixed_task(cache, s2i, chains, ne=5):
     if r < CONFIG["temporal_ratio"] + CONFIG["chain_effect_ratio"] and CHAIN_TRIPLES: return generate_chain_effect_task(
         cache, s2i)
     if r < CONFIG["temporal_ratio"] + CONFIG["chain_effect_ratio"] + CONFIG["multistep_ratio"] and any(
-        chains.get(d) for d in [2, 3]): return generate_multistep_task(cache, s2i, chains, 3)
+            chains.get(d) for d in [2, 3]): return generate_multistep_task(cache, s2i, chains, 3)
     return generate_single_task(cache, s2i, ne, rules_dict=TRAIN_RULES)
 
 
@@ -1351,7 +1372,7 @@ def train_cycle(model, cache, s2i, i2s, chains, all_states, all_sv, n_iters, cyc
     param_groups = [{"params": model_params, "lr": lr}, {"params": vit_params, "lr": lr * 0.1}]
     opt = torch.optim.AdamW(param_groups, weight_decay=0.01)
     sch = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: s / 200 if s < 200 else 0.5 * (
-                1 + math.cos(math.pi * (s - 200) / max(n_iters - 200, 1))))
+            1 + math.cos(math.pi * (s - 200) / max(n_iters - 200, 1))))
     model.train();
     cache.vit.train();
     ok, tot = 0, 0;
@@ -1386,7 +1407,8 @@ def train_cycle(model, cache, s2i, i2s, chains, all_states, all_sv, n_iters, cyc
             prog) + cfg["goal_loss_weight"] * gl + cfg["precondition_loss_weight"] * pl) / cfg["grad_accumulation"]
         loss.backward()
         with torch.no_grad():
-            pred_state, sim = nearest_neighbor(pred_vec, all_states, cache); correct = pred_state == task["expected"]
+            pred_state, sim = nearest_neighbor(pred_vec, all_states, cache);
+            correct = pred_state == task["expected"]
         ok += correct;
         tot += 1
         with torch.no_grad():
@@ -1520,10 +1542,12 @@ def evaluate(model, cache, s2i, i2s, chains, all_states):
         plan, sc = model.plan(cache, task["initial_state"], task["goal_state"], max_depth=task["depth"])
         is_rt = task["initial_state"] == task["goal_state"]
         if plan:
-            fc = plan[0] == task["correct_actions"][0]; full_c = plan[:len(task["correct_actions"])] == task[
+            fc = plan[0] == task["correct_actions"][0];
+            full_c = plan[:len(task["correct_actions"])] == task[
                 "correct_actions"]
         else:
-            fc = is_rt; full_c = is_rt
+            fc = is_rt;
+            full_c = is_rt
         pl_1st += fc;
         pl_full += full_c;
         pl_t += 1
